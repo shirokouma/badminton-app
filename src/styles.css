@@ -599,3 +599,68 @@ button:disabled {
   font-size: 12px;
   padding: 8px 10px;
 }
+.authScreen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.authCard {
+  width: 100%;
+  max-width: 480px;
+  background: white;
+  border-radius: 22px;
+  padding: 18px;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.08);
+}
+
+.authModeTabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.authModeButton {
+  background: #e5e7eb;
+  color: #111827;
+}
+
+.activeAuthMode {
+  background: #111827;
+  color: white;
+}
+
+.bigAuthButton {
+  width: 100%;
+  padding: 16px;
+  font-size: 18px;
+  margin-top: 8px;
+}
+
+.circleHeader {
+  background: white;
+  border-radius: 16px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+
+.circleLabel {
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: bold;
+  margin-bottom: 2px;
+}
+
+.logoutButton {
+  background: #e5e7eb;
+  color: #111827;
+  font-size: 12px;
+  padding: 8px 10px;
+}

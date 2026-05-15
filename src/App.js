@@ -1,4 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  serverTimestamp,
+  setDoc,
+} from "firebase/firestore";
+import { db } from "./firebase";
 import "./styles.css";
 
 function shuffle(array) {
@@ -39,7 +49,11 @@ function makeBestGame(
     (a, b) => (playCounts[a.id] || 0) - (playCounts[b.id] || 0)
   );
 
-  const candidates = sortedByPlayCount.slice(0, Math.min(12, sortedByPlayCount.length));
+  const candidates = sortedByPlayCount.slice(
+    0,
+    Math.min(12, sortedByPlayCount.length)
+  );
+
   const lowestPlayCount = Math.min(
     ...waitingMembers.map((member) => playCounts[member.id] || 0)
   );
@@ -50,12 +64,26 @@ function makeBestGame(
     for (let j = i + 1; j < candidates.length; j++) {
       for (let k = j + 1; k < candidates.length; k++) {
         for (let l = k + 1; l < candidates.length; l++) {
-          const group = [candidates[i], candidates[j], candidates[k], candidates[l]];
+          const group = [
+            candidates[i],
+            candidates[j],
+            candidates[k],
+            candidates[l],
+          ];
 
           const patterns = [
-            [[0, 1], [2, 3]],
-            [[0, 2], [1, 3]],
-            [[0, 3], [1, 2]],
+            [
+              [0, 1],
+              [2, 3],
+            ],
+            [
+              [0, 2],
+              [1, 3],
+            ],
+            [
+              [0, 3],
+              [1, 2],
+            ],
           ];
 
           for (const pattern of patterns) {
@@ -65,17 +93,26 @@ function makeBestGame(
             const keyA = pairKey(teamA[0], teamA[1]);
             const keyB = pairKey(teamB[0], teamB[1]);
 
-            const groupPlayCounts = group.map((member) => playCounts[member.id] || 0);
+            const groupPlayCounts = group.map(
+              (member) => playCounts[member.id] || 0
+            );
             const groupMaxPlayCount = Math.max(...groupPlayCounts);
             const groupMinPlayCount = Math.min(...groupPlayCounts);
 
             const lowPlayPriorityPenalty = group.reduce((sum, member) => {
-              return sum + Math.max(0, (playCounts[member.id] || 0) - lowestPlayCount);
+              return (
+                sum +
+                Math.max(0, (playCounts[member.id] || 0) - lowestPlayCount)
+              );
             }, 0);
 
-            const playCountSpreadPenalty = Math.max(0, groupMaxPlayCount - groupMinPlayCount - 2);
+            const playCountSpreadPenalty = Math.max(
+              0,
+              groupMaxPlayCount - groupMinPlayCount - 2
+            );
 
             const allCourtPairs = getAllPairs(group);
+
             const relationshipPenalty = allCourtPairs.reduce(
               (sum, key) => sum + (relationshipHistory[key] || 0),
               0
@@ -96,8 +133,14 @@ function makeBestGame(
               0
             );
 
-            const teamARate = teamA.reduce((sum, member) => sum + getMemberRate(member), 0);
-            const teamBRate = teamB.reduce((sum, member) => sum + getMemberRate(member), 0);
+            const teamARate = teamA.reduce(
+              (sum, member) => sum + getMemberRate(member),
+              0
+            );
+            const teamBRate = teamB.reduce(
+              (sum, member) => sum + getMemberRate(member),
+              0
+            );
             const rateDiffPenalty = Math.abs(teamARate - teamBRate);
 
             const score =
@@ -127,8 +170,6 @@ function makeBestGame(
 
   return best;
 }
-
-const STORAGE_KEY = "badminton_members_v1";
 
 const groupNameOptions = [
   "初級",
@@ -192,6 +233,7 @@ function calculateRateMove(winnerTeam, loserTeam) {
     (sum, member) => sum + getMemberRate(member),
     0
   );
+
   const loserTotal = loserTeam.reduce(
     (sum, member) => sum + getMemberRate(member),
     0
@@ -220,6 +262,10 @@ function applyRateToMember(member, change) {
   };
 }
 
+function normalizeCircleId(value) {
+  return value.trim().toLowerCase();
+}
+
 const layoutOptions = {
   1: [{ id: "one", columns: 1, cells: [1] }],
   2: [
@@ -240,21 +286,49 @@ const layoutOptions = {
   ],
   5: [
     { id: "five-horizontal", columns: 5, cells: [1, 2, 3, 4, 5] },
-    { id: "five-left", columns: 4, cells: [1, 2, 3, 4, 5, null, null, null] },
-    { id: "five-right", columns: 4, cells: [1, 2, 3, 4, null, null, null, 5] },
+    {
+      id: "five-left",
+      columns: 4,
+      cells: [1, 2, 3, 4, 5, null, null, null],
+    },
+    {
+      id: "five-right",
+      columns: 4,
+      cells: [1, 2, 3, 4, null, null, null, 5],
+    },
     { id: "five-3-2", columns: 3, cells: [1, 2, 3, 4, 5, null] },
     { id: "five-2-3", columns: 3, cells: [1, 2, null, 3, 4, 5] },
     { id: "five-u", columns: 3, cells: [1, 2, 3, 4, null, 5] },
   ],
   6: [
     { id: "six-3-2", columns: 3, cells: [1, 2, 3, 4, 5, 6] },
-    { id: "six-left", columns: 4, cells: [1, 2, 3, 4, 5, 6, null, null] },
-    { id: "six-right", columns: 4, cells: [1, 2, 3, 4, null, null, 5, 6] },
-    { id: "six-center", columns: 4, cells: [1, 2, 3, 4, null, 5, 6, null] },
+    {
+      id: "six-left",
+      columns: 4,
+      cells: [1, 2, 3, 4, 5, 6, null, null],
+    },
+    {
+      id: "six-right",
+      columns: 4,
+      cells: [1, 2, 3, 4, null, null, 5, 6],
+    },
+    {
+      id: "six-center",
+      columns: 4,
+      cells: [1, 2, 3, 4, null, 5, 6, null],
+    },
   ],
   7: [
-    { id: "seven-left", columns: 4, cells: [1, 2, 3, 4, 5, 6, 7, null] },
-    { id: "seven-right", columns: 4, cells: [1, 2, 3, 4, null, 5, 6, 7] },
+    {
+      id: "seven-left",
+      columns: 4,
+      cells: [1, 2, 3, 4, 5, 6, 7, null],
+    },
+    {
+      id: "seven-right",
+      columns: 4,
+      cells: [1, 2, 3, 4, null, 5, 6, 7],
+    },
   ],
   8: [{ id: "eight", columns: 4, cells: [1, 2, 3, 4, 5, 6, 7, 8] }],
 };
@@ -356,18 +430,26 @@ function getInitialPlayCountForGroup(group) {
 }
 
 export default function App() {
-  const [screen, setScreen] = useState("home");
+  const [authMode, setAuthMode] = useState("login");
+  const [currentCircle, setCurrentCircle] = useState(null);
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [memberLoading, setMemberLoading] = useState(false);
 
-  const [members, setMembers] = useState(() => {
-    const savedMembers = localStorage.getItem(STORAGE_KEY);
-    if (!savedMembers) return [];
-
-    try {
-      return JSON.parse(savedMembers);
-    } catch {
-      return [];
-    }
+  const [loginForm, setLoginForm] = useState({
+    circleId: "",
+    password: "",
   });
+
+  const [createCircleForm, setCreateCircleForm] = useState({
+    circleName: "",
+    circleId: "",
+    password: "",
+    masterPassword: "",
+  });
+
+  const [screen, setScreen] = useState("home");
+  const [members, setMembers] = useState([]);
 
   const [groups, setGroups] = useState([]);
   const [activeGroupId, setActiveGroupId] = useState(null);
@@ -392,10 +474,6 @@ export default function App() {
   const [editDuplicateNicknameError, setEditDuplicateNicknameError] = useState("");
   const [editDeleteError, setEditDeleteError] = useState("");
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(members));
-  }, [members]);
-
   const activeGroup = useMemo(() => {
     return groups.find((group) => group.id === activeGroupId) || null;
   }, [groups, activeGroupId]);
@@ -410,6 +488,163 @@ export default function App() {
       setScreen("home");
     }
   }, [groups, activeGroupId, screen]);
+
+  const getMembersCollectionRef = (circleId) => {
+    return collection(db, "circles", circleId, "members");
+  };
+
+  const getMemberDocRef = (circleId, memberId) => {
+    return doc(db, "circles", circleId, "members", memberId);
+  };
+
+  const loadMembersFromFirestore = async (circleId) => {
+    setMemberLoading(true);
+
+    try {
+      const membersRef = getMembersCollectionRef(circleId);
+      const snapshot = await getDocs(membersRef);
+
+      const loadedMembers = snapshot.docs.map((memberDoc) => ({
+        id: memberDoc.id,
+        ...memberDoc.data(),
+      }));
+
+      setMembers(loadedMembers);
+    } catch (error) {
+      setAuthError("メンバー情報の読み込みに失敗しました");
+    } finally {
+      setMemberLoading(false);
+    }
+  };
+
+  const saveMemberToFirestore = async (circleId, member) => {
+    const memberRef = getMemberDocRef(circleId, member.id);
+    await setDoc(memberRef, member);
+  };
+
+  const deleteMemberFromFirestore = async (circleId, memberId) => {
+    const memberRef = getMemberDocRef(circleId, memberId);
+    await deleteDoc(memberRef);
+  };
+
+  const handleCreateCircle = async () => {
+    const circleName = createCircleForm.circleName.trim();
+    const circleId = normalizeCircleId(createCircleForm.circleId);
+    const password = createCircleForm.password.trim();
+    const masterPassword = createCircleForm.masterPassword.trim();
+
+    if (!circleName || !circleId || !password || !masterPassword) {
+      setAuthError("すべて入力してください");
+      return;
+    }
+
+    setAuthLoading(true);
+    setAuthError("");
+
+    try {
+      const circleRef = doc(db, "circles", circleId);
+      const circleSnap = await getDoc(circleRef);
+
+      if (circleSnap.exists()) {
+        setAuthError("このサークルIDはすでに使われています");
+        setAuthLoading(false);
+        return;
+      }
+
+      const newCircle = {
+        circleName,
+        circleId,
+        password,
+        masterPassword,
+        createdAt: serverTimestamp(),
+      };
+
+      await setDoc(circleRef, newCircle);
+
+      setCurrentCircle({
+        circleName,
+        circleId,
+      });
+
+      setMembers([]);
+      setGroups([]);
+      setActiveGroupId(null);
+      setScreen("home");
+      setAuthMode("login");
+      setCreateCircleForm({
+        circleName: "",
+        circleId: "",
+        password: "",
+        masterPassword: "",
+      });
+    } catch (error) {
+      setAuthError("サークル作成に失敗しました");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLoginCircle = async () => {
+    const circleId = normalizeCircleId(loginForm.circleId);
+    const password = loginForm.password.trim();
+
+    if (!circleId || !password) {
+      setAuthError("サークルIDとパスワードを入力してください");
+      return;
+    }
+
+    setAuthLoading(true);
+    setAuthError("");
+
+    try {
+      const circleRef = doc(db, "circles", circleId);
+      const circleSnap = await getDoc(circleRef);
+
+      if (!circleSnap.exists()) {
+        setAuthError("サークルIDが見つかりません");
+        setAuthLoading(false);
+        return;
+      }
+
+      const circleData = circleSnap.data();
+
+      if (circleData.password !== password) {
+        setAuthError("パスワードが違います");
+        setAuthLoading(false);
+        return;
+      }
+
+      setCurrentCircle({
+        circleName: circleData.circleName,
+        circleId: circleData.circleId,
+      });
+
+      setLoginForm({
+        circleId: "",
+        password: "",
+      });
+
+      setGroups([]);
+      setActiveGroupId(null);
+      setScreen("home");
+
+      await loadMembersFromFirestore(circleId);
+    } catch (error) {
+      setAuthError("ログインに失敗しました");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const logoutCircle = () => {
+    setCurrentCircle(null);
+    setMembers([]);
+    setGroups([]);
+    setActiveGroupId(null);
+    setScreen("home");
+    setIsParticipationModalOpen(false);
+    setTempSelectedIds([]);
+  };
 
   const updateActiveGroup = (updater) => {
     setGroups((prevGroups) =>
@@ -643,7 +878,9 @@ export default function App() {
     });
   };
 
-  const saveMember = () => {
+  const saveMember = async () => {
+    if (!currentCircle) return;
+
     if (
       !memberForm.nickname.trim() ||
       !memberForm.reading.trim() ||
@@ -669,12 +906,18 @@ export default function App() {
       rate: getInitialRate(memberForm.rank),
     };
 
-    setMembers([...members, newMember]);
-    setTempSelectedIds([...tempSelectedIds, newMember.id]);
-    setMemberForm(emptyMemberForm);
-    setMemberFormError(false);
-    setDuplicateNicknameError("");
-    setIsNewMemberFormOpen(false);
+    try {
+      await saveMemberToFirestore(currentCircle.circleId, newMember);
+
+      setMembers([...members, newMember]);
+      setTempSelectedIds([...tempSelectedIds, newMember.id]);
+      setMemberForm(emptyMemberForm);
+      setMemberFormError(false);
+      setDuplicateNicknameError("");
+      setIsNewMemberFormOpen(false);
+    } catch (error) {
+      setDuplicateNicknameError("メンバー登録に失敗しました");
+    }
   };
 
   const openEditMember = (member) => {
@@ -699,7 +942,9 @@ export default function App() {
     setEditDeleteError("");
   };
 
-  const saveEditedMember = () => {
+  const saveEditedMember = async () => {
+    if (!currentCircle) return;
+
     if (
       !editMemberForm.nickname.trim() ||
       !editMemberForm.reading.trim() ||
@@ -714,6 +959,9 @@ export default function App() {
       return;
     }
 
+    const targetMember = members.find((member) => member.id === editingMemberId);
+    if (!targetMember) return;
+
     const editedData = {
       nickname: editMemberForm.nickname.trim(),
       name: editMemberForm.nickname.trim(),
@@ -721,37 +969,49 @@ export default function App() {
       gender: editMemberForm.gender,
     };
 
-    setMembers((prevMembers) =>
-      prevMembers.map((member) =>
-        member.id === editingMemberId ? { ...member, ...editedData } : member
-      )
-    );
+    const editedMember = {
+      ...targetMember,
+      ...editedData,
+    };
 
-    setGroups((prevGroups) =>
-      prevGroups.map((group) => {
-        const updateMember = (member) =>
-          member.id === editingMemberId ? { ...member, ...editedData } : member;
+    try {
+      await saveMemberToFirestore(currentCircle.circleId, editedMember);
 
-        return {
-          ...group,
-          waitingMembers: group.waitingMembers.map(updateMember),
-          courts: group.courts.map((court) => {
-            if (!court) return court;
+      setMembers((prevMembers) =>
+        prevMembers.map((member) =>
+          member.id === editingMemberId ? { ...member, ...editedData } : member
+        )
+      );
 
-            return {
-              ...court,
-              teamA: court.teamA.map(updateMember),
-              teamB: court.teamB.map(updateMember),
-            };
-          }),
-        };
-      })
-    );
+      setGroups((prevGroups) =>
+        prevGroups.map((group) => {
+          const updateMember = (member) =>
+            member.id === editingMemberId ? { ...member, ...editedData } : member;
 
-    closeEditMember();
+          return {
+            ...group,
+            waitingMembers: group.waitingMembers.map(updateMember),
+            courts: group.courts.map((court) => {
+              if (!court) return court;
+
+              return {
+                ...court,
+                teamA: court.teamA.map(updateMember),
+                teamB: court.teamB.map(updateMember),
+              };
+            }),
+          };
+        })
+      );
+
+      closeEditMember();
+    } catch (error) {
+      setEditDuplicateNicknameError("メンバー編集に失敗しました");
+    }
   };
 
-  const deleteEditingMember = () => {
+  const deleteEditingMember = async () => {
+    if (!currentCircle) return;
     if (!editingMemberId) return;
 
     if (selectedIds.has(editingMemberId)) {
@@ -766,19 +1026,25 @@ export default function App() {
 
     if (!confirmDelete) return;
 
-    setMembers(members.filter((member) => member.id !== editingMemberId));
+    try {
+      await deleteMemberFromFirestore(currentCircle.circleId, editingMemberId);
 
-    setGroups((prevGroups) =>
-      prevGroups.map((group) => ({
-        ...group,
-        waitingMembers: group.waitingMembers.filter(
-          (member) => member.id !== editingMemberId
-        ),
-      }))
-    );
+      setMembers(members.filter((member) => member.id !== editingMemberId));
 
-    setTempSelectedIds(tempSelectedIds.filter((id) => id !== editingMemberId));
-    closeEditMember();
+      setGroups((prevGroups) =>
+        prevGroups.map((group) => ({
+          ...group,
+          waitingMembers: group.waitingMembers.filter(
+            (member) => member.id !== editingMemberId
+          ),
+        }))
+      );
+
+      setTempSelectedIds(tempSelectedIds.filter((id) => id !== editingMemberId));
+      closeEditMember();
+    } catch (error) {
+      setEditDeleteError("メンバー削除に失敗しました");
+    }
   };
 
   const handleSwapTap = (member, location) => {
@@ -926,7 +1192,9 @@ export default function App() {
     });
   };
 
-  const confirmCourtResult = (index) => {
+  const confirmCourtResult = async (index) => {
+    if (!currentCircle) return;
+
     const targetCourt = courts[index];
     if (!targetCourt || !targetCourt.winner) return;
 
@@ -951,46 +1219,207 @@ export default function App() {
       return member;
     };
 
-    setMembers((prevMembers) => prevMembers.map(updateRate));
+    const nextMembers = members.map(updateRate);
+    const changedMembers = nextMembers.filter(
+      (member) => winnerIds.has(member.id) || loserIds.has(member.id)
+    );
 
-    setGroups((prevGroups) =>
-      prevGroups.map((group) => {
-        const updatedWaitingMembers = group.waitingMembers.map(updateRate);
+    try {
+      await Promise.all(
+        changedMembers.map((member) =>
+          saveMemberToFirestore(currentCircle.circleId, member)
+        )
+      );
 
-        const updatedCourts = group.courts.map((court, courtIndex) => {
-          if (!court) return court;
+      setMembers(nextMembers);
 
-          if (group.id === activeGroupId && courtIndex === index) {
-            return null;
+      setGroups((prevGroups) =>
+        prevGroups.map((group) => {
+          const updatedWaitingMembers = group.waitingMembers.map(updateRate);
+
+          const updatedCourts = group.courts.map((court, courtIndex) => {
+            if (!court) return court;
+
+            if (group.id === activeGroupId && courtIndex === index) {
+              return null;
+            }
+
+            return {
+              ...court,
+              teamA: court.teamA.map(updateRate),
+              teamB: court.teamB.map(updateRate),
+            };
+          });
+
+          if (group.id !== activeGroupId) {
+            return {
+              ...group,
+              waitingMembers: updatedWaitingMembers,
+              courts: updatedCourts,
+            };
           }
 
-          return {
-            ...court,
-            teamA: court.teamA.map(updateRate),
-            teamB: court.teamB.map(updateRate),
-          };
-        });
+          const updatedCourtMembers = [
+            ...targetCourt.teamA,
+            ...targetCourt.teamB,
+          ].map(updateRate);
 
-        if (group.id !== activeGroupId) {
           return {
             ...group,
-            waitingMembers: updatedWaitingMembers,
+            waitingMembers: [...updatedWaitingMembers, ...updatedCourtMembers],
             courts: updatedCourts,
+            selectedSwap: null,
           };
-        }
+        })
+      );
+    } catch (error) {
+      alert("レートの保存に失敗しました");
+    }
+  };
 
-        const updatedCourtMembers = [
-          ...targetCourt.teamA,
-          ...targetCourt.teamB,
-        ].map(updateRate);
+  const renderAuthScreen = () => {
+    return (
+      <div className="app authScreen">
+        <div className="authCard">
+          <h1>バドミントン組み合わせアプリ</h1>
 
-        return {
-          ...group,
-          waitingMembers: [...updatedWaitingMembers, ...updatedCourtMembers],
-          courts: updatedCourts,
-          selectedSwap: null,
-        };
-      })
+          <div className="authModeTabs">
+            <button
+              className={
+                authMode === "login"
+                  ? "authModeButton activeAuthMode"
+                  : "authModeButton"
+              }
+              onClick={() => {
+                setAuthMode("login");
+                setAuthError("");
+              }}
+            >
+              ログイン
+            </button>
+            <button
+              className={
+                authMode === "create"
+                  ? "authModeButton activeAuthMode"
+                  : "authModeButton"
+              }
+              onClick={() => {
+                setAuthMode("create");
+                setAuthError("");
+              }}
+            >
+              サークル作成
+            </button>
+          </div>
+
+          {authMode === "login" ? (
+            <>
+              <label>
+                サークルID
+                <input
+                  value={loginForm.circleId}
+                  onChange={(e) =>
+                    setLoginForm({ ...loginForm, circleId: e.target.value })
+                  }
+                  placeholder="例：osaka-badminton"
+                />
+              </label>
+
+              <label>
+                パスワード
+                <input
+                  type="password"
+                  value={loginForm.password}
+                  onChange={(e) =>
+                    setLoginForm({ ...loginForm, password: e.target.value })
+                  }
+                  placeholder="ログイン用パスワード"
+                />
+              </label>
+
+              {authError && <p className="errorText centerText">{authError}</p>}
+
+              <button
+                className="bigAuthButton"
+                onClick={handleLoginCircle}
+                disabled={authLoading}
+              >
+                {authLoading ? "確認中..." : "ログイン"}
+              </button>
+            </>
+          ) : (
+            <>
+              <label>
+                サークル名
+                <input
+                  value={createCircleForm.circleName}
+                  onChange={(e) =>
+                    setCreateCircleForm({
+                      ...createCircleForm,
+                      circleName: e.target.value,
+                    })
+                  }
+                  placeholder="例：大阪バドミントンサークル"
+                />
+              </label>
+
+              <label>
+                サークルID
+                <input
+                  value={createCircleForm.circleId}
+                  onChange={(e) =>
+                    setCreateCircleForm({
+                      ...createCircleForm,
+                      circleId: e.target.value,
+                    })
+                  }
+                  placeholder="例：osaka-badminton"
+                />
+              </label>
+
+              <label>
+                ログイン用パスワード
+                <input
+                  type="password"
+                  value={createCircleForm.password}
+                  onChange={(e) =>
+                    setCreateCircleForm({
+                      ...createCircleForm,
+                      password: e.target.value,
+                    })
+                  }
+                  placeholder="管理者で共有するパスワード"
+                />
+              </label>
+
+              <label>
+                マスターパスワード
+                <input
+                  type="password"
+                  value={createCircleForm.masterPassword}
+                  onChange={(e) =>
+                    setCreateCircleForm({
+                      ...createCircleForm,
+                      masterPassword: e.target.value,
+                    })
+                  }
+                  placeholder="削除・レート編集用"
+                />
+              </label>
+
+              {authError && <p className="errorText centerText">{authError}</p>}
+
+              <button
+                className="bigAuthButton"
+                onClick={handleCreateCircle}
+                disabled={authLoading}
+              >
+                {authLoading ? "作成中..." : "サークル作成"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
     );
   };
 
@@ -1231,10 +1660,27 @@ export default function App() {
     );
   };
 
+  if (!currentCircle) {
+    return renderAuthScreen();
+  }
+
   if (screen === "home") {
     return (
       <div className="app homeScreen">
+        <div className="circleHeader">
+          <div>
+            <div className="circleLabel">ログイン中</div>
+            <strong>{currentCircle.circleName}</strong>
+          </div>
+          <button className="logoutButton" onClick={logoutCircle}>
+            ログアウト
+          </button>
+        </div>
+
         <h1>バドミントン組み合わせアプリ</h1>
+
+        {memberLoading && <p className="participantCount">メンバー読み込み中...</p>}
+
         <button className="bigCreateButton" onClick={startCreateGroup}>
           新規作成
         </button>
@@ -1245,6 +1691,16 @@ export default function App() {
   if (screen === "create") {
     return (
       <div className="app">
+        <div className="circleHeader">
+          <div>
+            <div className="circleLabel">ログイン中</div>
+            <strong>{currentCircle.circleName}</strong>
+          </div>
+          <button className="logoutButton" onClick={logoutCircle}>
+            ログアウト
+          </button>
+        </div>
+
         {renderTabs()}
 
         <h1>グループ作成</h1>
@@ -1352,6 +1808,16 @@ export default function App() {
   if (!activeGroup) {
     return (
       <div className="app homeScreen">
+        <div className="circleHeader">
+          <div>
+            <div className="circleLabel">ログイン中</div>
+            <strong>{currentCircle.circleName}</strong>
+          </div>
+          <button className="logoutButton" onClick={logoutCircle}>
+            ログアウト
+          </button>
+        </div>
+
         <h1>バドミントン組み合わせアプリ</h1>
         <button className="bigCreateButton" onClick={startCreateGroup}>
           新規作成
@@ -1362,6 +1828,16 @@ export default function App() {
 
   return (
     <div className="app">
+      <div className="circleHeader">
+        <div>
+          <div className="circleLabel">ログイン中</div>
+          <strong>{currentCircle.circleName}</strong>
+        </div>
+        <button className="logoutButton" onClick={logoutCircle}>
+          ログアウト
+        </button>
+      </div>
+
       {renderTabs()}
 
       <div className="mainTitleRow">

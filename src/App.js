@@ -36,11 +36,16 @@ function getAllPairs(members) {
   return pairs;
 }
 
+function groupKey(members) {
+  return members.map((member) => member.id).sort().join("-");
+}
+
 function makeBestGame(
   waitingMembers,
   pairHistory,
   opponentHistory,
   relationshipHistory,
+  courtGroupHistory,
   playCounts
 ) {
   if (waitingMembers.length < 4) return null;
@@ -49,10 +54,19 @@ function makeBestGame(
     (a, b) => (playCounts[a.id] || 0) - (playCounts[b.id] || 0)
   );
 
-  const candidates = sortedByPlayCount.slice(
-    0,
-    Math.min(12, sortedByPlayCount.length)
+  const zeroPlayMembers = sortedByPlayCount.filter(
+    (member) => (playCounts[member.id] || 0) === 0
   );
+
+  const mustZeroCount = Math.min(4, zeroPlayMembers.length);
+  const candidateMap = new Map();
+
+  zeroPlayMembers.forEach((member) => candidateMap.set(member.id, member));
+  sortedByPlayCount
+    .slice(0, Math.min(16, sortedByPlayCount.length))
+    .forEach((member) => candidateMap.set(member.id, member));
+
+  const candidates = Array.from(candidateMap.values());
 
   const lowestPlayCount = Math.min(
     ...waitingMembers.map((member) => playCounts[member.id] || 0)
@@ -92,12 +106,22 @@ function makeBestGame(
 
             const keyA = pairKey(teamA[0], teamA[1]);
             const keyB = pairKey(teamB[0], teamB[1]);
+            const currentGroupKey = groupKey(group);
 
             const groupPlayCounts = group.map(
               (member) => playCounts[member.id] || 0
             );
             const groupMaxPlayCount = Math.max(...groupPlayCounts);
             const groupMinPlayCount = Math.min(...groupPlayCounts);
+
+            const groupZeroCount = group.filter(
+              (member) => (playCounts[member.id] || 0) === 0
+            ).length;
+
+            const zeroPlayPenalty = Math.max(
+              0,
+              mustZeroCount - groupZeroCount
+            );
 
             const lowPlayPriorityPenalty = group.reduce((sum, member) => {
               return (
@@ -117,6 +141,8 @@ function makeBestGame(
               (sum, key) => sum + (relationshipHistory[key] || 0),
               0
             );
+
+            const courtGroupPenalty = courtGroupHistory[currentGroupKey] || 0;
 
             const pairDuplicatePenalty =
               (pairHistory[keyA] || 0) + (pairHistory[keyB] || 0);
@@ -144,9 +170,11 @@ function makeBestGame(
             const rateDiffPenalty = Math.abs(teamARate - teamBRate);
 
             const score =
+              zeroPlayPenalty * 10000000 +
               lowPlayPriorityPenalty * 1000000 +
               playCountSpreadPenalty * 500000 +
-              relationshipPenalty * 20000 +
+              courtGroupPenalty * 300000 +
+              relationshipPenalty * 80000 +
               pairDuplicatePenalty * 10000 +
               opponentPenalty * 5000 +
               rateDiffPenalty +
@@ -159,6 +187,7 @@ function makeBestGame(
                 pairKeys: [keyA, keyB],
                 opponentKeys: opponentPairs,
                 relationshipKeys: allCourtPairs,
+                courtGroupKey: currentGroupKey,
                 score,
               };
             }
@@ -195,8 +224,8 @@ const rankOptions = [
   "基礎打ちができる",
   "ゲーム中打ち分けが出来る",
   "得意技がある",
-  "中級",
-  "上級",
+  "中級（大会4、5部参加したことがある）",
+  "上級（大会4、5部で優勝したことがある、3部に参加したことがある）",
   "大会で1部2部で出たことがある",
   "大会では1部の常連",
   "全国経験あり",
@@ -208,8 +237,8 @@ const rankRateMap = {
   基礎打ちができる: 2600,
   ゲーム中打ち分けが出来る: 2900,
   得意技がある: 3100,
-  中級: 3300,
-  上級: 3500,
+  "中級（大会4、5部参加したことがある）": 3300,
+  "上級（大会4、5部で優勝したことがある、3部に参加したことがある）": 3500,
   大会で1部2部で出たことがある: 3700,
   大会では1部の常連: 3900,
   全国経験あり: 4100,
@@ -242,14 +271,14 @@ function calculateRateMove(winnerTeam, loserTeam) {
   const diff = Math.abs(winnerTotal - loserTotal);
   const bonus = Math.floor(diff / 25);
 
-  let move = 80;
+  let move = 60;
 
   if (winnerTotal < loserTotal) {
-    move = 80 + bonus;
+    move = 60 + bonus;
   }
 
   if (winnerTotal > loserTotal) {
-    move = 80 - bonus;
+    move = 60 - bonus;
   }
 
   return clampRateMove(move);
@@ -265,7 +294,6 @@ function applyRateToMember(member, change) {
 function normalizeCircleId(value) {
   return value.trim().toLowerCase();
 }
-
 const layoutOptions = {
   1: [{ id: "one", columns: 1, cells: [1] }],
   2: [
@@ -402,19 +430,35 @@ const emptyMemberForm = {
   rank: "",
 };
 
-function createGroupObject({ groupName, courtCount, layoutId, rateDisplay }) {
+function getPointRuleMinutes(pointRule) {
+  if (pointRule === "11点") return 15;
+  if (pointRule === "15点") return 20;
+  return 25;
+}
+
+function createGroupObject({
+  groupName,
+  courtCount,
+  layoutId,
+  rateDisplay,
+  playCountVisible,
+  pointRule,
+}) {
   return {
     id: Date.now().toString(),
     groupName,
     courtCount,
     layoutId,
     rateDisplay,
+    playCountVisible,
+    pointRule,
     createdAt: Date.now(),
     waitingMembers: [],
     courts: Array.from({ length: Number(courtCount) }, () => null),
     pairHistory: {},
     opponentHistory: {},
     relationshipHistory: {},
+    courtGroupHistory: {},
     playCounts: {},
     selectedSwap: null,
   };
@@ -424,9 +468,10 @@ function getInitialPlayCountForGroup(group) {
   if (!group?.createdAt) return 0;
 
   const elapsed = Date.now() - group.createdAt;
-  const twentyFiveMinutes = 25 * 60 * 1000;
+  const minutes = getPointRuleMinutes(group.pointRule);
+  const interval = minutes * 60 * 1000;
 
-  return Math.floor(elapsed / twentyFiveMinutes);
+  return Math.floor(elapsed / interval);
 }
 
 export default function App() {
@@ -458,10 +503,13 @@ export default function App() {
   const [createCourtCount, setCreateCourtCount] = useState("");
   const [createLayoutId, setCreateLayoutId] = useState("");
   const [createRateDisplay, setCreateRateDisplay] = useState("");
+  const [createPlayCountVisible, setCreatePlayCountVisible] = useState("");
+  const [createPointRule, setCreatePointRule] = useState("");
   const [groupError, setGroupError] = useState(false);
 
   const [isParticipationModalOpen, setIsParticipationModalOpen] = useState(false);
   const [tempSelectedIds, setTempSelectedIds] = useState([]);
+  const [participationError, setParticipationError] = useState("");
   const [memberSearch, setMemberSearch] = useState("");
   const [isNewMemberFormOpen, setIsNewMemberFormOpen] = useState(false);
   const [memberForm, setMemberForm] = useState(emptyMemberForm);
@@ -526,7 +574,6 @@ export default function App() {
     const memberRef = getMemberDocRef(circleId, memberId);
     await deleteDoc(memberRef);
   };
-
   const handleCreateCircle = async () => {
     const circleName = createCircleForm.circleName.trim();
     const circleId = normalizeCircleId(createCircleForm.circleId);
@@ -665,9 +712,11 @@ export default function App() {
   const pairHistory = activeGroup?.pairHistory || {};
   const opponentHistory = activeGroup?.opponentHistory || {};
   const relationshipHistory = activeGroup?.relationshipHistory || {};
+  const courtGroupHistory = activeGroup?.courtGroupHistory || {};
   const playCounts = activeGroup?.playCounts || {};
   const selectedSwap = activeGroup?.selectedSwap || null;
   const isRateVisible = activeGroup?.rateDisplay === "あり";
+  const isPlayCountVisible = activeGroup?.playCountVisible === "あり";
 
   const currentLayouts = createCourtCount
     ? layoutOptions[Number(createCourtCount)] || []
@@ -737,6 +786,8 @@ export default function App() {
     setCreateCourtCount("");
     setCreateLayoutId("");
     setCreateRateDisplay("");
+    setCreatePlayCountVisible("");
+    setCreatePointRule("");
     setGroupError(false);
   };
 
@@ -752,7 +803,14 @@ export default function App() {
   };
 
   const createGroup = () => {
-    if (!createGroupName || !createCourtCount || !createLayoutId || !createRateDisplay) {
+    if (
+      !createGroupName ||
+      !createCourtCount ||
+      !createLayoutId ||
+      !createRateDisplay ||
+      !createPlayCountVisible ||
+      !createPointRule
+    ) {
       setGroupError(true);
       return;
     }
@@ -762,6 +820,8 @@ export default function App() {
       courtCount: createCourtCount,
       layoutId: createLayoutId,
       rateDisplay: createRateDisplay,
+      playCountVisible: createPlayCountVisible,
+      pointRule: createPointRule,
     });
 
     setGroups((prevGroups) => [...prevGroups, newGroup]);
@@ -801,9 +861,20 @@ export default function App() {
       setScreen("home");
     }
   };
-
   const openParticipationModal = () => {
-    setTempSelectedIds(Array.from(selectedIds));
+    const ids = new Set();
+
+    waitingMembers.forEach((member) => ids.add(member.id));
+
+    courts.forEach((court) => {
+      if (court) {
+        [...court.teamA, ...court.teamB].forEach((member) =>
+          ids.add(member.id)
+        );
+      }
+    });
+
+    setTempSelectedIds(Array.from(ids));
     setMemberSearch("");
     setIsNewMemberFormOpen(false);
     setMemberForm(emptyMemberForm);
@@ -814,12 +885,14 @@ export default function App() {
     setEditMemberFormError(false);
     setEditDuplicateNicknameError("");
     setEditDeleteError("");
+    setParticipationError("");
     setIsParticipationModalOpen(true);
   };
 
   const closeParticipationModal = () => {
     setIsParticipationModalOpen(false);
     setTempSelectedIds([]);
+    setParticipationError("");
     setMemberSearch("");
     setIsNewMemberFormOpen(false);
     setMemberForm(emptyMemberForm);
@@ -833,22 +906,30 @@ export default function App() {
   };
 
   const toggleTempMember = (member) => {
-    if (onCourtIds.has(member.id)) return;
+    if (onCourtIds.has(member.id)) {
+      setParticipationError("試合中のため変更できません");
+      return;
+    }
+
     if (editingMemberId) return;
 
-    if (tempSelectedIds.includes(member.id)) {
-      setTempSelectedIds(tempSelectedIds.filter((id) => id !== member.id));
-    } else {
-      setTempSelectedIds([...tempSelectedIds, member.id]);
-    }
+    setParticipationError("");
+
+    setTempSelectedIds((prevIds) => {
+      if (prevIds.includes(member.id)) {
+        return prevIds.filter((id) => id !== member.id);
+      }
+
+      return [...prevIds, member.id];
+    });
   };
 
   const decideParticipation = () => {
     const courtMemberIds = new Set(onCourtIds);
+    const tempIdSet = new Set(tempSelectedIds);
 
     const selectedWaitingMembers = sortedMembers.filter(
-      (member) =>
-        tempSelectedIds.includes(member.id) && !courtMemberIds.has(member.id)
+      (member) => tempIdSet.has(member.id) && !courtMemberIds.has(member.id)
     );
 
     updateActiveGroup((group) => {
@@ -910,7 +991,7 @@ export default function App() {
       await saveMemberToFirestore(currentCircle.circleId, newMember);
 
       setMembers([...members, newMember]);
-      setTempSelectedIds([...tempSelectedIds, newMember.id]);
+      setTempSelectedIds((prevIds) => [...prevIds, newMember.id]);
       setMemberForm(emptyMemberForm);
       setMemberFormError(false);
       setDuplicateNicknameError("");
@@ -1040,13 +1121,14 @@ export default function App() {
         }))
       );
 
-      setTempSelectedIds(tempSelectedIds.filter((id) => id !== editingMemberId));
+      setTempSelectedIds((prevIds) =>
+        prevIds.filter((id) => id !== editingMemberId)
+      );
       closeEditMember();
     } catch (error) {
       setEditDeleteError("メンバー削除に失敗しました");
     }
   };
-
   const handleSwapTap = (member, location) => {
     if (!member) return;
 
@@ -1122,6 +1204,7 @@ export default function App() {
       pairHistory,
       opponentHistory,
       relationshipHistory,
+      courtGroupHistory,
       playCounts
     );
 
@@ -1147,6 +1230,12 @@ export default function App() {
       nextRelationshipHistory[key] = (nextRelationshipHistory[key] || 0) + 1;
     });
 
+    const nextCourtGroupHistory = { ...courtGroupHistory };
+    if (game.courtGroupKey) {
+      nextCourtGroupHistory[game.courtGroupKey] =
+        (nextCourtGroupHistory[game.courtGroupKey] || 0) + 1;
+    }
+
     const nextPlayCounts = { ...playCounts };
     [...game.teamA, ...game.teamB].forEach((m) => {
       nextPlayCounts[m.id] = (nextPlayCounts[m.id] || 0) + 1;
@@ -1158,6 +1247,7 @@ export default function App() {
       pairHistory: nextPairHistory,
       opponentHistory: nextOpponentHistory,
       relationshipHistory: nextRelationshipHistory,
+      courtGroupHistory: nextCourtGroupHistory,
       playCounts: nextPlayCounts,
       selectedSwap: null,
     });
@@ -1276,7 +1366,6 @@ export default function App() {
       alert("レートの保存に失敗しました");
     }
   };
-
   const renderAuthScreen = () => {
     return (
       <div className="app authScreen">
@@ -1442,8 +1531,15 @@ export default function App() {
         onClick={() => handleSwapTap(member, location)}
       >
         <span>{member.nickname || member.name}</span>
+
         {isRateVisible && (
           <span className="playerRate">R{getMemberRate(member)}</span>
+        )}
+
+        {isPlayCountVisible && (
+          <span className="playCountText">
+            参加{playCounts[member.id] || 0}
+          </span>
         )}
       </button>
     );
@@ -1519,7 +1615,6 @@ export default function App() {
       </div>
     );
   };
-
   const renderMemberForm = ({
     form,
     setForm,
@@ -1608,11 +1703,7 @@ export default function App() {
           </button>
         </div>
 
-        {!isEdit && duplicateError && (
-          <p className="errorText centerText">{duplicateError}</p>
-        )}
-
-        {isEdit && duplicateError && (
+        {duplicateError && (
           <p className="errorText centerText">{duplicateError}</p>
         )}
 
@@ -1786,6 +1877,50 @@ export default function App() {
             <p className="errorText">選択してください</p>
           )}
         </section>
+        <section className="card">
+          <h2>参加回数を表示しますか</h2>
+          <div className="optionGrid">
+            {rateDisplayOptions.map((option) => (
+              <button
+                key={option}
+                onClick={() => setCreatePlayCountVisible(option)}
+                className={
+                  createPlayCountVisible === option
+                    ? "option selectedOption"
+                    : "option"
+                }
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+          {groupError && !createPlayCountVisible && (
+            <p className="errorText">選択してください</p>
+          )}
+        </section>
+
+        <section className="card">
+          <h2>何点制ですか</h2>
+          <p className="pointRuleDescription">
+            （これで途中参加の人の参加回数を調節します）
+          </p>
+          <div className="optionGrid">
+            {["11点", "15点", "21点"].map((option) => (
+              <button
+                key={option}
+                onClick={() => setCreatePointRule(option)}
+                className={
+                  createPointRule === option ? "option selectedOption" : "option"
+                }
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+          {groupError && !createPointRule && (
+            <p className="errorText">選択してください</p>
+          )}
+        </section>
 
         {groupError && <p className="mainError">選ばれていません</p>}
 
@@ -1856,6 +1991,10 @@ export default function App() {
         <p className="rateDisplayStatus">
           レート表示：{isRateVisible ? "あり" : "なし"}
         </p>
+        <p className="rateDisplayStatus">
+          参加回数表示：{isPlayCountVisible ? "あり" : "なし"}
+        </p>
+        <p className="tapSwapText">タップして入れ替え</p>
       </section>
 
       <div
@@ -1899,6 +2038,11 @@ export default function App() {
               {isRateVisible && (
                 <span className="waitingRate">R{getMemberRate(member)}</span>
               )}
+              {isPlayCountVisible && (
+                <span className="playCountText">
+                  参加{playCounts[member.id] || 0}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -1919,11 +2063,15 @@ export default function App() {
               選択中：{tempSelectedIds.length}人
             </p>
 
+            {participationError && (
+              <p className="errorText centerText">{participationError}</p>
+            )}
+
             <div className="participationActions">
               <button onClick={() => setIsNewMemberFormOpen(!isNewMemberFormOpen)}>
                 新規登録
               </button>
-              <span className="longPressHint">長押しで編集</span>
+              <span className="longPressHint">編集ボタンから変更</span>
             </div>
 
             {isNewMemberFormOpen &&
@@ -1962,29 +2110,6 @@ export default function App() {
                   <button
                     key={member.id}
                     onClick={() => toggleTempMember(member)}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      openEditMember(member);
-                    }}
-                    onTouchStart={(e) => {
-                      e.currentTarget.longPressTimer = setTimeout(() => {
-                        openEditMember(member);
-                      }, 650);
-                    }}
-                    onTouchEnd={(e) => {
-                      clearTimeout(e.currentTarget.longPressTimer);
-                    }}
-                    onMouseDown={(e) => {
-                      e.currentTarget.longPressTimer = setTimeout(() => {
-                        openEditMember(member);
-                      }, 650);
-                    }}
-                    onMouseUp={(e) => {
-                      clearTimeout(e.currentTarget.longPressTimer);
-                    }}
-                    onMouseLeave={(e) => {
-                      clearTimeout(e.currentTarget.longPressTimer);
-                    }}
                     className={
                       isSelected
                         ? "member selected modalMember"
@@ -1997,6 +2122,16 @@ export default function App() {
                       <span className="memberRate">R{getMemberRate(member)}</span>
                     )}
                     {isOnCourt && <small>試合中</small>}
+
+                    <button
+                      className="editMemberButton"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openEditMember(member);
+                      }}
+                    >
+                      編集
+                    </button>
                   </button>
                 );
               })}

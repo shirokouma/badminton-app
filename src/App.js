@@ -5,6 +5,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  onSnapshot,
   serverTimestamp,
   setDoc,
 } from "firebase/firestore";
@@ -527,6 +528,7 @@ export default function App() {
 
   const [syncMessage, setSyncMessage] = useState("");
   const [lastSyncTime, setLastSyncTime] = useState("");
+  const [isSavingSync, setIsSavingSync] = useState(false);
 
   const activeGroup = useMemo(() => {
     return groups.find((group) => group.id === activeGroupId) || null;
@@ -542,6 +544,46 @@ export default function App() {
       setScreen("home");
     }
   }, [groups, activeGroupId, screen]);
+
+
+  useEffect(() => {
+    if (!currentCircle) return;
+
+    const syncRef = doc(
+      db,
+      "circles",
+      currentCircle.circleId,
+      "sync",
+      "current"
+    );
+
+    const unsubscribe = onSnapshot(
+      syncRef,
+      (snapshot) => {
+        if (!snapshot.exists()) return;
+        if (isSavingSync) return;
+
+        const data = snapshot.data();
+        const loadedGroups = Array.isArray(data.groups) ? data.groups : [];
+
+        setGroups(loadedGroups);
+        setActiveGroupId(data.activeGroupId || loadedGroups[0]?.id || null);
+
+        if (loadedGroups.length > 0) {
+          setScreen("main");
+        }
+
+        setLastSyncTime(formatSyncTime());
+        setSyncMessage("他の端末の更新を反映しました");
+      },
+      (error) => {
+        console.error("自動同期読み込み失敗", error);
+        setSyncMessage("自動同期に失敗しました");
+      }
+    );
+
+    return () => unsubscribe();
+  }, [currentCircle, isSavingSync]);
 
   const getMembersCollectionRef = (circleId) => {
     return collection(db, "circles", circleId, "members");
@@ -600,6 +642,8 @@ export default function App() {
     if (!currentCircle) return;
 
     try {
+      setIsSavingSync(true);
+
       const syncRef = getSyncDocRef(currentCircle.circleId);
 
       await setDoc(syncRef, {
@@ -613,6 +657,10 @@ export default function App() {
     } catch (error) {
       console.error("同期保存失敗", error);
       setSyncMessage("同期に失敗しました");
+    } finally {
+      setTimeout(() => {
+        setIsSavingSync(false);
+      }, 500);
     }
   };
 

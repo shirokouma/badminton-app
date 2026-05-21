@@ -525,6 +525,7 @@ export default function App() {
   const [editMemberFormError, setEditMemberFormError] = useState(false);
   const [editDuplicateNicknameError, setEditDuplicateNicknameError] = useState("");
   const [editDeleteError, setEditDeleteError] = useState("");
+  const [isEditSelectMode, setIsEditSelectMode] = useState(false);
 
   const [syncMessage, setSyncMessage] = useState("");
   const [lastSyncTime, setLastSyncTime] = useState("");
@@ -587,6 +588,36 @@ export default function App() {
         console.error("自動同期失敗", error);
         setAutoSyncStatus("自動同期エラー");
         setSyncMessage("自動同期に失敗しました");
+      }
+    );
+
+    return () => unsubscribe();
+  }, [currentCircle?.circleId]);
+
+
+  useEffect(() => {
+    if (!currentCircle?.circleId) return;
+
+    const membersRef = collection(
+      db,
+      "circles",
+      currentCircle.circleId,
+      "members"
+    );
+
+    const unsubscribe = onSnapshot(
+      membersRef,
+      (snapshot) => {
+        const loadedMembers = snapshot.docs.map((memberDoc) => ({
+          id: memberDoc.id,
+          ...memberDoc.data(),
+        }));
+
+        setMembers(loadedMembers);
+      },
+      (error) => {
+        console.error("メンバー自動同期失敗", error);
+        setSyncMessage("メンバー自動同期に失敗しました");
       }
     );
 
@@ -1032,6 +1063,7 @@ export default function App() {
     setIsNewMemberFormOpen(false);
     setEditingMemberId(null);
     setEditDeleteError("");
+    setIsEditSelectMode(false);
   };
 
   const deleteActiveGroup = async () => {
@@ -1059,6 +1091,32 @@ export default function App() {
     await saveGroupsToFirestore(nextGroups, nextActiveGroupId);
   };
 
+
+
+  const resetTodayState = async () => {
+    if (!currentCircle) return;
+
+    const confirmReset = window.confirm(
+      "現在のグループ状況をリセットしますか？\n\n※参加状況・コート状況・参加回数のみリセットされます\n※メンバー登録やレートは残ったままです"
+    );
+
+    if (!confirmReset) return;
+
+    const nextGroups = [];
+    const nextActiveGroupId = null;
+
+    setGroups(nextGroups);
+    setActiveGroupId(nextActiveGroupId);
+    setScreen("home");
+    setIsParticipationModalOpen(false);
+    setTempSelectedIds([]);
+    setMemberSearch("");
+    setIsNewMemberFormOpen(false);
+    setEditingMemberId(null);
+    setIsEditSelectMode(false);
+
+    await saveGroupsToFirestore(nextGroups, nextActiveGroupId);
+  };
 
   const openCourtAddLayoutSelect = () => {
     if (!activeGroup) return;
@@ -1141,6 +1199,7 @@ export default function App() {
     setEditMemberFormError(false);
     setEditDuplicateNicknameError("");
     setEditDeleteError("");
+    setIsEditSelectMode(false);
   };
 
   const toggleTempMember = (member) => {
@@ -2009,7 +2068,7 @@ export default function App() {
           ))}
 
           <button className="addGroupTab" onClick={startCreateGroup}>
-            ＋
+            グループを追加
           </button>
         </div>
       </div>
@@ -2242,28 +2301,40 @@ export default function App() {
 
       <div className="mainTitleRow">
         <h1>{activeGroup.groupName}</h1>
-        <button className="deleteGroupButton" onClick={deleteActiveGroup}>
-          グループ削除
-        </button>
+
+        <div className="mainTitleButtons">
+          <button className="resetTodayButton" onClick={resetTodayState}>
+            本日の状態をリセット
+          </button>
+
+          <button className="deleteGroupButton" onClick={deleteActiveGroup}>
+            グループ削除
+          </button>
+        </div>
       </div>
 
       <section className="card">
-        <div className="sectionHeader">
+        <div className="memberInfoRow">
           <h2>メンバー</h2>
-
-          <div className="memberHeaderButtons">
-            <button className="participationMainButton" onClick={openParticipationModal}>参加</button>
-
-            <button onClick={openCourtAddLayoutSelect}>
-              コート追加
-            </button>
-
-            <button onClick={openCourtDeleteLayoutSelect}>
-              コート削除
-            </button>
-          </div>
+          <p className="participantCountInline">参加中：{selectedIds.size}人</p>
         </div>
-        <p className="participantCount">参加中：{selectedIds.size}人</p>
+
+        <div className="memberHeaderButtons">
+          <button
+            className="participationMainButton"
+            onClick={openParticipationModal}
+          >
+            参加
+          </button>
+
+          <button onClick={openCourtAddLayoutSelect}>
+            コート追加
+          </button>
+
+          <button onClick={openCourtDeleteLayoutSelect}>
+            コート削除
+          </button>
+        </div>
 
         <div className="syncRow">
           <button className="syncButton" onClick={loadGroupsFromFirestore}>
@@ -2390,11 +2461,34 @@ export default function App() {
             )}
 
             <div className="participationActions">
-              <button onClick={() => setIsNewMemberFormOpen(!isNewMemberFormOpen)}>
+              <button
+                onClick={() => {
+                  setIsNewMemberFormOpen(!isNewMemberFormOpen);
+                  setIsEditSelectMode(false);
+                }}
+              >
                 新規登録
               </button>
-              <span className="longPressHint">編集ボタンから変更</span>
+
+              <button
+                className={
+                  isEditSelectMode
+                    ? "memberEditModeButton activeMemberEditModeButton"
+                    : "memberEditModeButton"
+                }
+                onClick={() => {
+                  setIsEditSelectMode(!isEditSelectMode);
+                  setIsNewMemberFormOpen(false);
+                  setEditingMemberId(null);
+                }}
+              >
+                編集
+              </button>
             </div>
+
+            {isEditSelectMode && (
+              <p className="editSelectGuide">編集するメンバーを選んでください</p>
+            )}
 
             {isNewMemberFormOpen &&
               renderMemberForm({
@@ -2431,7 +2525,15 @@ export default function App() {
                 return (
                   <button
                     key={member.id}
-                    onClick={() => toggleTempMember(member)}
+                    onClick={() => {
+                      if (isEditSelectMode) {
+                        openEditMember(member);
+                        setIsEditSelectMode(false);
+                        return;
+                      }
+
+                      toggleTempMember(member);
+                    }}
                     className={
                       isSelected
                         ? "member selected modalMember"
@@ -2439,21 +2541,16 @@ export default function App() {
                     }
                   >
                     <strong>{member.nickname || member.name}</strong>
-                    <span>{member.reading}</span>
                     {isRateVisible && (
-                      <span className="memberRate">R{getMemberRate(member)}</span>
+                      <div className="memberRateRow">
+                        <span className="memberRate">R{getMemberRate(member)}</span>
+                        {isOnCourt && <span className="onCourtLabel">試合中</span>}
+                      </div>
                     )}
-                    {isOnCourt && <small>試合中</small>}
 
-                    <button
-                      className="editMemberButton"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openEditMember(member);
-                      }}
-                    >
-                      編集
-                    </button>
+                    {!isRateVisible && isOnCourt && (
+                      <span className="onCourtLabel">試合中</span>
+                    )}
                   </button>
                 );
               })}

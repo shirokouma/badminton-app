@@ -528,6 +528,7 @@ export default function App() {
 
   const [syncMessage, setSyncMessage] = useState("");
   const [lastSyncTime, setLastSyncTime] = useState("");
+  const [autoSyncStatus, setAutoSyncStatus] = useState("");
 
   const activeGroup = useMemo(() => {
     return groups.find((group) => group.id === activeGroupId) || null;
@@ -546,7 +547,7 @@ export default function App() {
 
 
   useEffect(() => {
-    if (!currentCircle) return;
+    if (!currentCircle?.circleId) return;
 
     const syncRef = doc(
       db,
@@ -556,10 +557,16 @@ export default function App() {
       "current"
     );
 
+    setAutoSyncStatus("自動同期監視中");
+
     const unsubscribe = onSnapshot(
       syncRef,
       (snapshot) => {
-        if (!snapshot.exists()) return;
+        if (!snapshot.exists()) {
+          setAutoSyncStatus("同期データ待機中");
+          return;
+        }
+
         const data = snapshot.data();
         const loadedGroups = Array.isArray(data.groups) ? data.groups : [];
 
@@ -568,19 +575,23 @@ export default function App() {
 
         if (loadedGroups.length > 0) {
           setScreen("main");
+        } else {
+          setScreen("home");
         }
 
         setLastSyncTime(formatSyncTime());
-        setSyncMessage("他の端末の更新を反映しました");
+        setSyncMessage("自動同期で更新しました");
+        setAutoSyncStatus("自動同期中");
       },
       (error) => {
-        console.error("自動同期読み込み失敗", error);
+        console.error("自動同期失敗", error);
+        setAutoSyncStatus("自動同期エラー");
         setSyncMessage("自動同期に失敗しました");
       }
     );
 
     return () => unsubscribe();
-  }, [currentCircle]);
+  }, [currentCircle?.circleId]);
 
   const getMembersCollectionRef = (circleId) => {
     return collection(db, "circles", circleId, "members");
@@ -639,7 +650,6 @@ export default function App() {
     if (!currentCircle) return;
 
     try {
-
       const syncRef = getSyncDocRef(currentCircle.circleId);
 
       await setDoc(syncRef, {
@@ -2265,6 +2275,7 @@ export default function App() {
         </div>
 
         {syncMessage && <p className="syncMessage">{syncMessage}</p>}
+        {autoSyncStatus && <p className="autoSyncStatus">{autoSyncStatus}</p>}
       </section>
 
       <div

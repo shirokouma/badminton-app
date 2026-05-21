@@ -295,6 +295,11 @@ function applyRateToMember(member, change) {
 function normalizeCircleId(value) {
   return value.trim().toLowerCase();
 }
+
+function getCircledNumber(number) {
+  const circledNumbers = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧"];
+  return circledNumbers[number - 1] || String(number);
+}
 const layoutOptions = {
   1: [{ id: "one", columns: 1, cells: [1] }],
   2: [
@@ -914,17 +919,11 @@ export default function App() {
     return layouts.find((layout) => layout.id === activeGroup.layoutId) || null;
   }, [activeGroup]);
 
-  const shouldRotateMainLayout = useMemo(() => {
+  const shouldShowRotateMessage = useMemo(() => {
     return hasThreeOrMoreHorizontalCourts(selectedLayout);
   }, [selectedLayout]);
 
-  const displayLayout = useMemo(() => {
-    if (shouldRotateMainLayout) {
-      return rotateLayout(selectedLayout);
-    }
-
-    return selectedLayout;
-  }, [selectedLayout, shouldRotateMainLayout]);
+  const displayLayout = selectedLayout;
 
   const selectedIds = useMemo(() => {
     const ids = new Set(waitingMembers.map((m) => m.id));
@@ -1876,11 +1875,7 @@ export default function App() {
     return (
       <div
         key={index}
-        className={
-          shouldRotateMainLayout
-            ? "courtVisual courtVisualRotated"
-            : "courtVisual"
-        }
+        className="courtVisual"
       >
         {court ? (
           <div className="game">
@@ -1901,7 +1896,7 @@ export default function App() {
               </button>
             </div>
 
-            <div className="vs">VS</div>
+            <div className="vs">VS <span className="courtNumberBadge">{getCircledNumber(courtNumber)}</span></div>
 
             <div className={court.winner === "B" ? "teamBox teamBoxWin" : "teamBox"}>
               {court.winner === "B" && <div className="winText">WIN</div>}
@@ -2348,6 +2343,12 @@ export default function App() {
         {syncMessage && <p className="syncMessage">{syncMessage}</p>}
         {autoSyncStatus && <p className="autoSyncStatus">{autoSyncStatus}</p>}
       </section>
+
+      {shouldShowRotateMessage && (
+        <p className="rotateScreenHint">
+          画面を回転させると見やすいです
+        </p>
+      )}
 
       <div
         className="courtGrid"

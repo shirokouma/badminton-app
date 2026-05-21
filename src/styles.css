@@ -816,3 +816,10 @@ button:disabled {
   font-size: 14px;
   font-weight: bold;
 }
+
+.autoSyncStatus {
+  margin: 2px 0 0;
+  color: #059669;
+  font-size: 12px;
+  font-weight: bold;
+}

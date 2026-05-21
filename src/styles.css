@@ -823,3 +823,71 @@ button:disabled {
   font-size: 12px;
   font-weight: bold;
 }
+
+.memberInfoRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.participantCountInline {
+  margin: 0;
+  color: #4b5563;
+  font-weight: bold;
+}
+
+.memberHeaderButtons {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.memberEditModeButton {
+  background: #1e3a8a;
+  color: white;
+  border-radius: 12px;
+  font-weight: bold;
+}
+
+.activeMemberEditModeButton {
+  background: #172554;
+  box-shadow: 0 0 0 3px rgba(30, 58, 138, 0.25);
+}
+
+.editSelectGuide {
+  color: #1e3a8a;
+  font-size: 13px;
+  font-weight: bold;
+  margin: 6px 0 10px;
+}
+
+.memberRateRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.onCourtLabel {
+  color: #dc2626 !important;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.mainTitleButtons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.resetTodayButton {
+  background: #fff7ed;
+  color: #9a3412;
+  border: 1px solid #fed7aa;
+  font-size: 12px;
+  padding: 8px 10px;
+}

@@ -528,7 +528,6 @@ export default function App() {
 
   const [syncMessage, setSyncMessage] = useState("");
   const [lastSyncTime, setLastSyncTime] = useState("");
-  const [isSavingSync, setIsSavingSync] = useState(false);
 
   const activeGroup = useMemo(() => {
     return groups.find((group) => group.id === activeGroupId) || null;
@@ -561,8 +560,6 @@ export default function App() {
       syncRef,
       (snapshot) => {
         if (!snapshot.exists()) return;
-        if (isSavingSync) return;
-
         const data = snapshot.data();
         const loadedGroups = Array.isArray(data.groups) ? data.groups : [];
 
@@ -583,7 +580,7 @@ export default function App() {
     );
 
     return () => unsubscribe();
-  }, [currentCircle, isSavingSync]);
+  }, [currentCircle]);
 
   const getMembersCollectionRef = (circleId) => {
     return collection(db, "circles", circleId, "members");
@@ -642,7 +639,6 @@ export default function App() {
     if (!currentCircle) return;
 
     try {
-      setIsSavingSync(true);
 
       const syncRef = getSyncDocRef(currentCircle.circleId);
 
@@ -657,10 +653,6 @@ export default function App() {
     } catch (error) {
       console.error("同期保存失敗", error);
       setSyncMessage("同期に失敗しました");
-    } finally {
-      setTimeout(() => {
-        setIsSavingSync(false);
-      }, 500);
     }
   };
 

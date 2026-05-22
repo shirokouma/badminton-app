@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
   deleteDoc,
@@ -245,6 +245,41 @@ const rankRateMap = {
   全国経験あり: 4100,
 };
 
+const DEFAULT_RATE_CHANGE_BASE = 60;
+
+const DEFAULT_RANK_INITIAL_RATES = { ...rankRateMap };
+
+const DEFAULT_RATE_PROFILES = ["通常", "初級", "中級", "上級"];
+
+const kanaJumpGroups = [
+  { key: "あ", label: "あ", chars: ["あ", "い", "う", "え", "お"] },
+  { key: "か", label: "か", chars: ["か", "き", "く", "け", "こ", "が", "ぎ", "ぐ", "げ", "ご"] },
+  { key: "さ", label: "さ", chars: ["さ", "し", "す", "せ", "そ", "ざ", "じ", "ず", "ぜ", "ぞ"] },
+  { key: "た", label: "た", chars: ["た", "ち", "つ", "て", "と", "だ", "ぢ", "づ", "で", "ど"] },
+  { key: "な", label: "な", chars: ["な", "に", "ぬ", "ね", "の"] },
+  { key: "は", label: "は", chars: ["は", "ひ", "ふ", "へ", "ほ", "ば", "び", "ぶ", "べ", "ぼ", "ぱ", "ぴ", "ぷ", "ぺ", "ぽ"] },
+  { key: "ま", label: "ま", chars: ["ま", "み", "む", "め", "も"] },
+  { key: "や", label: "や", chars: ["や", "ゆ", "よ"] },
+  { key: "ら", label: "ら", chars: ["ら", "り", "る", "れ", "ろ"] },
+  { key: "わ", label: "わ", chars: ["わ", "を", "ん"] },
+  { key: "英", label: "英", chars: [] },
+  { key: "数", label: "数", chars: [] },
+];
+
+function getKanaJumpGroupKey(member) {
+  const text = (member.reading || member.nickname || member.name || "").trim();
+  const first = text.charAt(0).toLowerCase();
+
+  if (!first) return "他";
+
+  if (/^[a-z]$/.test(first)) return "英";
+  if (/^[0-9]$/.test(first)) return "数";
+
+  const group = kanaJumpGroups.find((item) => item.chars.includes(first));
+  return group?.key || "他";
+}
+
+
 function getInitialRate(rank) {
   return rankRateMap[rank] || 3000;
 }
@@ -483,6 +518,14 @@ function getInitialPlayCountForGroup(group) {
 export default function App() {
   const [authMode, setAuthMode] = useState("login");
   const [currentCircle, setCurrentCircle] = useState(null);
+  const [userMode, setUserMode] = useState("normal");
+  const [viewerStep, setViewerStep] = useState("none");
+  const [viewerMemberForm, setViewerMemberForm] = useState(emptyMemberForm);
+  const [viewerMemberFormError, setViewerMemberFormError] = useState(false);
+  const [viewerDuplicateNicknameError, setViewerDuplicateNicknameError] = useState("");
+  const [viewerSelectedMemberId, setViewerSelectedMemberId] = useState("");
+  const [isViewerGuideOpen, setIsViewerGuideOpen] = useState(false);
+  const [viewerMemberSearch, setViewerMemberSearch] = useState("");
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [memberLoading, setMemberLoading] = useState(false);
@@ -536,9 +579,51 @@ export default function App() {
   const [lastSyncTime, setLastSyncTime] = useState("");
   const [autoSyncStatus, setAutoSyncStatus] = useState("");
 
+  const [isAdminSettingsOpen, setIsAdminSettingsOpen] = useState(false);
+  const [adminPasswordInput, setAdminPasswordInput] = useState("");
+  const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const [adminError, setAdminError] = useState("");
+  const [adminPanel, setAdminPanel] = useState("menu");
+  const [rateChangeBase, setRateChangeBase] = useState(DEFAULT_RATE_CHANGE_BASE);
+  const [rankInitialRates, setRankInitialRates] = useState(DEFAULT_RANK_INITIAL_RATES);
+  const [rateProfiles, setRateProfiles] = useState(DEFAULT_RATE_PROFILES);
+
+
+  const [selectedRateEditMember, setSelectedRateEditMember] = useState(null);
+  const [rateEditValue, setRateEditValue] = useState(0);
+
+  const [selectedAdminMember, setSelectedAdminMember] = useState(null);
+  const [adminMemberEditForm, setAdminMemberEditForm] = useState({
+    nickname: "",
+    reading: "",
+    gender: "",
+    rank: "",
+    rate: 3000,
+  });
+  const [adminMemberEditError, setAdminMemberEditError] = useState("");
+
+  const participationGroupRefs = useRef({});
+  const viewerGroupRefs = useRef({});
+  const adminGroupRefs = useRef({});
+  const [adminSettingsForm, setAdminSettingsForm] = useState({
+    circleName: "",
+    circleId: "",
+    password: "",
+    masterPassword: "",
+    viewerPassword: "",
+    defaultRateDisplay: "あり",
+  });
+
   const activeGroup = useMemo(() => {
     return groups.find((group) => group.id === activeGroupId) || null;
   }, [groups, activeGroupId]);
+
+  const isViewerMode = userMode === "viewer";
+
+  const viewerSelectedMember = useMemo(() => {
+    if (!viewerSelectedMemberId) return null;
+    return members.find((member) => member.id === viewerSelectedMemberId) || null;
+  }, [members, viewerSelectedMemberId]);
 
   useEffect(() => {
     if (groups.length > 0 && !activeGroupId) {
@@ -762,6 +847,11 @@ export default function App() {
         circleId,
         password,
         masterPassword,
+        viewerPassword: "",
+        defaultRateDisplay: "あり",
+        rateChangeBase: DEFAULT_RATE_CHANGE_BASE,
+        rankInitialRates: DEFAULT_RANK_INITIAL_RATES,
+        rateProfiles: DEFAULT_RATE_PROFILES,
         createdAt: serverTimestamp(),
       };
 
@@ -770,7 +860,13 @@ export default function App() {
       setCurrentCircle({
         circleName,
         circleId,
+        defaultRateDisplay: "あり",
+        rateChangeBase: DEFAULT_RATE_CHANGE_BASE,
+        rankInitialRates: DEFAULT_RANK_INITIAL_RATES,
+        rateProfiles: DEFAULT_RATE_PROFILES,
       });
+      setUserMode("normal");
+      setViewerStep("none");
 
       setMembers([]);
       setGroups([]);
@@ -814,16 +910,31 @@ export default function App() {
 
       const circleData = circleSnap.data();
 
-      if (circleData.password !== password) {
+      const isNormalPassword = circleData.password === password;
+      const isViewerPassword =
+        circleData.viewerPassword && circleData.viewerPassword === password;
+
+      if (!isNormalPassword && !isViewerPassword) {
         setAuthError("パスワードが違います");
         setAuthLoading(false);
         return;
       }
 
+      setUserMode(isViewerPassword ? "viewer" : "normal");
+      setViewerStep(isViewerPassword ? "confirm" : "none");
+
       setCurrentCircle({
         circleName: circleData.circleName,
         circleId: circleData.circleId,
+        defaultRateDisplay: circleData.defaultRateDisplay || "あり",
+        rateChangeBase: circleData.rateChangeBase || DEFAULT_RATE_CHANGE_BASE,
+        rankInitialRates: circleData.rankInitialRates || DEFAULT_RANK_INITIAL_RATES,
+        rateProfiles: circleData.rateProfiles || DEFAULT_RATE_PROFILES,
       });
+
+      setRateChangeBase(circleData.rateChangeBase || DEFAULT_RATE_CHANGE_BASE);
+      setRankInitialRates(circleData.rankInitialRates || DEFAULT_RANK_INITIAL_RATES);
+      setRateProfiles(circleData.rateProfiles || DEFAULT_RATE_PROFILES);
 
       setLoginForm({
         circleId: "",
@@ -867,6 +978,14 @@ export default function App() {
 
   const logoutCircle = () => {
     setCurrentCircle(null);
+    setUserMode("normal");
+    setViewerStep("none");
+    setViewerMemberForm(emptyMemberForm);
+    setViewerMemberFormError(false);
+    setViewerDuplicateNicknameError("");
+    setViewerSelectedMemberId("");
+    setIsViewerGuideOpen(false);
+    setViewerMemberSearch("");
     setMembers([]);
     setGroups([]);
     setActiveGroupId(null);
@@ -912,6 +1031,18 @@ export default function App() {
       )
     );
   }, [members]);
+
+  const filteredViewerMembers = useMemo(() => {
+    const keyword = viewerMemberSearch.trim();
+
+    if (!keyword) return sortedMembers;
+
+    return sortedMembers.filter((member) => {
+      const nickname = member.nickname || member.name || "";
+      const reading = member.reading || "";
+      return nickname.includes(keyword) || reading.includes(keyword);
+    });
+  }, [sortedMembers, viewerMemberSearch]);
 
   const selectedLayout = useMemo(() => {
     if (!activeGroup) return null;
@@ -1004,7 +1135,6 @@ export default function App() {
     setCreateGroupName("");
     setCreateCourtCount("");
     setCreateLayoutId("");
-    setCreateRateDisplay("");
     setCreatePlayCountVisible("");
     setCreatePointRule("");
     setGroupError(false);
@@ -1026,7 +1156,6 @@ export default function App() {
       !createGroupName ||
       !createCourtCount ||
       !createLayoutId ||
-      !createRateDisplay ||
       !createPlayCountVisible ||
       !createPointRule
     ) {
@@ -1038,7 +1167,7 @@ export default function App() {
       groupName: createGroupName,
       courtCount: createCourtCount,
       layoutId: createLayoutId,
-      rateDisplay: createRateDisplay,
+      rateDisplay: currentCircle?.defaultRateDisplay || "あり",
       playCountVisible: createPlayCountVisible,
       pointRule: createPointRule,
     });
@@ -1090,7 +1219,355 @@ export default function App() {
     await saveGroupsToFirestore(nextGroups, nextActiveGroupId);
   };
 
+  const openAdminSettings = () => {
+    setIsAdminSettingsOpen(true);
+    setAdminPasswordInput("");
+    setAdminUnlocked(false);
+    setAdminError("");
+    setAdminPanel("menu");
+    setAdminSettingsForm({
+      circleName: currentCircle?.circleName || "",
+      circleId: currentCircle?.circleId || "",
+      password: "",
+      masterPassword: "",
+      viewerPassword: "",
+      defaultRateDisplay: currentCircle?.defaultRateDisplay || "あり",
+    });
+  };
 
+  const closeAdminSettings = () => {
+    setIsAdminSettingsOpen(false);
+    setAdminPasswordInput("");
+    setAdminUnlocked(false);
+    setAdminError("");
+    setAdminPanel("menu");
+    setSelectedAdminMember(null);
+  };
+
+  const verifyAdminPassword = async () => {
+    if (!currentCircle) return;
+
+    if (!adminPasswordInput.trim()) {
+      setAdminError("マスターパスワードを入力してください");
+      return;
+    }
+
+    try {
+      const circleRef = doc(db, "circles", currentCircle.circleId);
+      const circleSnap = await getDoc(circleRef);
+
+      if (!circleSnap.exists()) {
+        setAdminError("サークル情報が見つかりません");
+        return;
+      }
+
+      const circleData = circleSnap.data();
+
+      if (circleData.masterPassword !== adminPasswordInput.trim()) {
+        setAdminError("マスターパスワードが違います");
+        return;
+      }
+
+      setAdminUnlocked(true);
+      setAdminError("");
+      setAdminPanel("menu");
+      setAdminSettingsForm({
+        circleName: circleData.circleName || "",
+        circleId: circleData.circleId || currentCircle.circleId,
+        password: circleData.password || "",
+        masterPassword: circleData.masterPassword || "",
+        viewerPassword: circleData.viewerPassword || "",
+        defaultRateDisplay: circleData.defaultRateDisplay || "あり",
+      });
+
+      setRateChangeBase(circleData.rateChangeBase || DEFAULT_RATE_CHANGE_BASE);
+      setRankInitialRates(circleData.rankInitialRates || DEFAULT_RANK_INITIAL_RATES);
+      setRateProfiles(circleData.rateProfiles || DEFAULT_RATE_PROFILES);
+    } catch (error) {
+      setAdminError("確認に失敗しました");
+    }
+  };
+
+  const copySubCollection = async (oldCircleId, newCircleId, subCollectionName) => {
+    const oldRef = collection(db, "circles", oldCircleId, subCollectionName);
+    const snapshot = await getDocs(oldRef);
+
+    await Promise.all(
+      snapshot.docs.map((itemDoc) =>
+        setDoc(
+          doc(db, "circles", newCircleId, subCollectionName, itemDoc.id),
+          itemDoc.data()
+        )
+      )
+    );
+  };
+
+  const openAdminMemberEdit = (member) => {
+    setSelectedAdminMember(member);
+    setAdminMemberEditError("");
+    setAdminMemberEditForm({
+      nickname: member.nickname || member.name || "",
+      reading: member.reading || "",
+      gender: member.gender || "",
+      rank: member.rank || "",
+      rate: getMemberRate(member),
+    });
+  };
+
+  const closeAdminMemberEdit = () => {
+    setSelectedAdminMember(null);
+    setAdminMemberEditError("");
+    setAdminMemberEditForm({
+      nickname: "",
+      reading: "",
+      gender: "",
+      rank: "",
+      rate: 3000,
+    });
+  };
+
+  const saveAdminMemberEdit = async () => {
+    if (!currentCircle || !selectedAdminMember) return;
+
+    const nickname = adminMemberEditForm.nickname.trim();
+    const reading = adminMemberEditForm.reading.trim();
+    const gender = adminMemberEditForm.gender;
+    const rank = adminMemberEditForm.rank;
+    const rate = Number(adminMemberEditForm.rate);
+
+    if (!nickname || !reading || !gender || !rank || Number.isNaN(rate)) {
+      setAdminMemberEditError("すべて入力してください");
+      return;
+    }
+
+    const duplicate = members.some((member) => {
+      if (member.id === selectedAdminMember.id) return false;
+      return (member.nickname || member.name) === nickname;
+    });
+
+    if (duplicate) {
+      setAdminMemberEditError("同じニックネームがあります");
+      return;
+    }
+
+    const editedData = {
+      nickname,
+      name: nickname,
+      reading,
+      gender,
+      rank,
+      rate,
+      updatedAt: serverTimestamp(),
+    };
+
+    try {
+      await setDoc(
+        doc(db, "circles", currentCircle.circleId, "members", selectedAdminMember.id),
+        editedData,
+        { merge: true }
+      );
+
+      setMembers((prevMembers) =>
+        prevMembers.map((member) =>
+          member.id === selectedAdminMember.id
+            ? { ...member, ...editedData }
+            : member
+        )
+      );
+
+      const updateMemberInGroup = (member) =>
+        member.id === selectedAdminMember.id
+          ? { ...member, ...editedData }
+          : member;
+
+      const nextGroups = groups.map((group) => ({
+        ...group,
+        waitingMembers: group.waitingMembers.map(updateMemberInGroup),
+        courts: group.courts.map((court) => {
+          if (!court) return court;
+
+          return {
+            ...court,
+            teamA: court.teamA.map(updateMemberInGroup),
+            teamB: court.teamB.map(updateMemberInGroup),
+          };
+        }),
+      }));
+
+      setGroups(nextGroups);
+      await saveGroupsToFirestore(nextGroups, activeGroupId);
+
+      setSyncMessage("メンバー情報を保存しました");
+      closeAdminMemberEdit();
+    } catch (error) {
+      setAdminMemberEditError("保存に失敗しました");
+    }
+  };
+
+  const deleteAdminMember = async () => {
+    if (!currentCircle || !selectedAdminMember) return;
+
+    const isInGroup = groups.some((group) => {
+      const inWaiting = group.waitingMembers.some(
+        (member) => member.id === selectedAdminMember.id
+      );
+
+      const inCourt = group.courts.some((court) => {
+        if (!court) return false;
+        return [...court.teamA, ...court.teamB].some(
+          (member) => member.id === selectedAdminMember.id
+        );
+      });
+
+      return inWaiting || inCourt;
+    });
+
+    if (isInGroup) {
+      setAdminMemberEditError("参加中または試合中のため削除できません");
+      return;
+    }
+
+    const ok = window.confirm(
+      `${selectedAdminMember.nickname || selectedAdminMember.name}を削除しますか？`
+    );
+
+    if (!ok) return;
+
+    try {
+      await deleteDoc(
+        doc(db, "circles", currentCircle.circleId, "members", selectedAdminMember.id)
+      );
+
+      setMembers((prevMembers) =>
+        prevMembers.filter((member) => member.id !== selectedAdminMember.id)
+      );
+
+      setSyncMessage("メンバーを削除しました");
+      closeAdminMemberEdit();
+    } catch (error) {
+      setAdminMemberEditError("削除に失敗しました");
+    }
+  };
+
+  const resetAllRates = async () => {
+    if (!currentCircle) return;
+
+    const ok = window.confirm(
+      "全メンバーのレートをランク初期値へ戻します。\nランクは保持されます。"
+    );
+
+    if (!ok) return;
+
+    try {
+      const nextMembers = members.map((member) => ({
+        ...member,
+        rate: getInitialRate(member.rank),
+        updatedAt: serverTimestamp(),
+      }));
+
+      await Promise.all(
+        nextMembers.map((member) =>
+          setDoc(
+            doc(db, "circles", currentCircle.circleId, "members", member.id),
+            {
+              rate: getInitialRate(member.rank),
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          )
+        )
+      );
+
+      setMembers(nextMembers);
+      setSyncMessage("全員のレートを初期化しました");
+    } catch (error) {
+      alert("レート初期化に失敗しました");
+    }
+  };
+
+  const saveAdminSettings = async () => {
+    if (!currentCircle) return;
+
+    const nextCircleName = adminSettingsForm.circleName.trim();
+    const nextCircleId = normalizeCircleId(adminSettingsForm.circleId);
+    const nextPassword = adminSettingsForm.password.trim();
+    const nextMasterPassword = adminSettingsForm.masterPassword.trim();
+    const nextViewerPassword = adminSettingsForm.viewerPassword.trim();
+    const nextDefaultRateDisplay = adminSettingsForm.defaultRateDisplay || "あり";
+    const nextRateChangeBase = Number(rateChangeBase) || DEFAULT_RATE_CHANGE_BASE;
+    const nextRankInitialRates = rankInitialRates || DEFAULT_RANK_INITIAL_RATES;
+    const nextRateProfiles = rateProfiles || DEFAULT_RATE_PROFILES;
+
+    if (!nextCircleName || !nextCircleId || !nextPassword || !nextMasterPassword) {
+      setAdminError("サークル名・ログインID・通常パスワード・管理者パスワードは必須です");
+      return;
+    }
+
+    try {
+      const oldCircleId = currentCircle.circleId;
+      const oldCircleRef = doc(db, "circles", oldCircleId);
+      const oldCircleSnap = await getDoc(oldCircleRef);
+
+      if (!oldCircleSnap.exists()) {
+        setAdminError("サークル情報が見つかりません");
+        return;
+      }
+
+      const oldCircleData = oldCircleSnap.data();
+
+      const nextCircleData = {
+        ...oldCircleData,
+        circleName: nextCircleName,
+        circleId: nextCircleId,
+        password: nextPassword,
+        masterPassword: nextMasterPassword,
+        viewerPassword: nextViewerPassword,
+        defaultRateDisplay: nextDefaultRateDisplay,
+        rateChangeBase: nextRateChangeBase,
+        rankInitialRates: nextRankInitialRates,
+        rateProfiles: nextRateProfiles,
+        updatedAt: serverTimestamp(),
+      };
+
+      if (nextCircleId !== oldCircleId) {
+        const newCircleRef = doc(db, "circles", nextCircleId);
+        const newCircleSnap = await getDoc(newCircleRef);
+
+        if (newCircleSnap.exists()) {
+          setAdminError("このログインIDはすでに使われています");
+          return;
+        }
+
+        await setDoc(newCircleRef, nextCircleData);
+        await copySubCollection(oldCircleId, nextCircleId, "members");
+        await copySubCollection(oldCircleId, nextCircleId, "sync");
+        await deleteDoc(oldCircleRef);
+      } else {
+        await setDoc(oldCircleRef, nextCircleData, { merge: true });
+      }
+
+      setCurrentCircle({
+        ...currentCircle,
+        circleName: nextCircleName,
+        circleId: nextCircleId,
+        defaultRateDisplay: nextDefaultRateDisplay,
+        rateChangeBase: nextRateChangeBase,
+        rankInitialRates: nextRankInitialRates,
+        rateProfiles: nextRateProfiles,
+      });
+
+      setAdminError("");
+      setSyncMessage("管理者設定を保存しました");
+      setAdminPanel("menu");
+
+      if (nextCircleId !== oldCircleId) {
+        alert("ログインIDを変更しました。次回から新しいIDでログインしてください。");
+      }
+    } catch (error) {
+      console.error("管理者設定保存失敗", error);
+      setAdminError("管理者設定の保存に失敗しました");
+    }
+  };
 
   const resetTodayState = async () => {
     if (!currentCircle) return;
@@ -1689,6 +2166,315 @@ export default function App() {
       alert("レートの保存に失敗しました");
     }
   };
+
+  const openViewerMemberSelect = () => {
+    setViewerStep("selectMember");
+    setViewerMemberSearch("");
+  };
+
+  const continueViewerToMain = () => {
+    setViewerStep("done");
+
+    if (groups.length > 0) {
+      setActiveGroupId(activeGroupId || groups[0]?.id || null);
+      setScreen("main");
+    } else {
+      setScreen("home");
+    }
+  };
+
+  const saveViewerMember = async () => {
+    if (!currentCircle) return;
+
+    if (
+      !viewerMemberForm.nickname.trim() ||
+      !viewerMemberForm.reading.trim() ||
+      !viewerMemberForm.gender ||
+      !viewerMemberForm.rank
+    ) {
+      setViewerMemberFormError(true);
+      return;
+    }
+
+    if (nicknameExists(viewerMemberForm.nickname)) {
+      setViewerDuplicateNicknameError("同じニックネームがあります");
+      return;
+    }
+
+    const newMember = {
+      id: Date.now().toString(),
+      nickname: viewerMemberForm.nickname.trim(),
+      name: viewerMemberForm.nickname.trim(),
+      reading: viewerMemberForm.reading.trim(),
+      gender: viewerMemberForm.gender,
+      rank: viewerMemberForm.rank,
+      rate: getInitialRate(viewerMemberForm.rank),
+    };
+
+    try {
+      await saveMemberToFirestore(currentCircle.circleId, newMember);
+
+      setMembers((prevMembers) => [...prevMembers, newMember]);
+      setViewerSelectedMemberId(newMember.id);
+      setViewerMemberForm(emptyMemberForm);
+      setViewerMemberFormError(false);
+      setViewerDuplicateNicknameError("");
+      continueViewerToMain();
+    } catch (error) {
+      setViewerDuplicateNicknameError("メンバー登録に失敗しました");
+    }
+  };
+
+  const renderViewerConfirmScreen = () => {
+    return (
+      <div className="app homeScreen">
+        <div className="circleHeader">
+          <div>
+            <div className="circleLabel">ログイン中</div>
+            <strong>{currentCircle.circleName}</strong>
+            <span className="viewerModeBadge">観賞用</span>
+          </div>
+
+          <div className="headerRightButtons">
+            <button className="logoutButton" onClick={logoutCircle}>
+              ログアウト
+            </button>
+          </div>
+        </div>
+
+        <section className="card viewerConfirmCard">
+          <h1>確認</h1>
+
+          <p className="viewerConfirmText">
+            このサークルで活動したこと・組み合わせアプリのメンバーに入っていますか？
+          </p>
+
+          <div className="viewerConfirmActions">
+            <button onClick={openViewerMemberSelect}>
+              はい
+            </button>
+
+            <button
+              className="subButton"
+              onClick={() => {
+                setViewerStep("register");
+                setViewerMemberForm(emptyMemberForm);
+                setViewerMemberFormError(false);
+                setViewerDuplicateNicknameError("");
+              }}
+            >
+              はじめてです・入っていないです
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  };
+
+  const renderViewerRegisterScreen = () => {
+    return (
+      <div className="app">
+        <div className="circleHeader">
+          <div>
+            <div className="circleLabel">ログイン中</div>
+            <strong>{currentCircle.circleName}</strong>
+            <span className="viewerModeBadge">観賞用</span>
+          </div>
+
+          <div className="headerRightButtons">
+            <button className="logoutButton" onClick={logoutCircle}>
+              ログアウト
+            </button>
+          </div>
+        </div>
+
+        <section className="card">
+          <h1>メンバー新規登録</h1>
+
+          {renderMemberForm({
+            form: viewerMemberForm,
+            setForm: setViewerMemberForm,
+            formError: viewerMemberFormError,
+            duplicateError: viewerDuplicateNicknameError,
+            onSave: saveViewerMember,
+            onClose: () => setViewerStep("confirm"),
+            isEdit: false,
+          })}
+        </section>
+      </div>
+    );
+  };
+
+
+  const getViewerStatusText = () => {
+    if (!viewerSelectedMember) {
+      return "自分の名前が選択されていません";
+    }
+
+    for (let index = 0; index < courts.length; index++) {
+      const court = courts[index];
+
+      if (!court) continue;
+
+      const isOnCourt = [...court.teamA, ...court.teamB].some(
+        (member) => member.id === viewerSelectedMember.id
+      );
+
+      if (isOnCourt) {
+        return `あなたは コート${getCircledNumber(index + 1)} で試合中です`;
+      }
+    }
+
+    const isWaiting = waitingMembers.some(
+      (member) => member.id === viewerSelectedMember.id
+    );
+
+    if (isWaiting) {
+      return "あなたは休憩中です";
+    }
+
+    return "あなたは現在の参加メンバーには入っていません";
+  };
+
+  const renderViewerMemberSelectScreen = () => {
+    return (
+      <div className="app">
+        <div className="circleHeader">
+          <div>
+            <div className="circleLabel">ログイン中</div>
+            <strong>{currentCircle.circleName}</strong>
+            <span className="viewerModeBadge">観賞用</span>
+          </div>
+
+          <div className="headerRightButtons">
+            <button className="logoutButton" onClick={logoutCircle}>
+              ログアウト
+            </button>
+          </div>
+        </div>
+
+        <section className="card">
+          <h1>自分の名前を選択</h1>
+
+          <p className="viewerConfirmText">
+            観賞画面で自分の場所を分かりやすく表示します。
+          </p>
+
+          <input
+            value={viewerMemberSearch}
+            onChange={(e) => setViewerMemberSearch(e.target.value)}
+            placeholder="検索：名前・読み方"
+          />
+
+          {renderGroupedMemberList({
+            membersForList: filteredViewerMembers,
+            refs: viewerGroupRefs,
+            renderMember: (member) => (
+              <button
+                key={member.id}
+                className={
+                  viewerSelectedMemberId === member.id
+                    ? "member selected"
+                    : "member"
+                }
+                onClick={() => {
+                  setViewerSelectedMemberId(member.id);
+                  continueViewerToMain();
+                }}
+              >
+                <strong>{member.nickname || member.name}</strong>
+                <span>レート：{getMemberRate(member)}</span>
+              </button>
+            ),
+          })}
+
+          <div className="bottomActions">
+            <button className="subButton" onClick={continueViewerToMain}>
+              選択せずに見る
+            </button>
+            <button className="subButton" onClick={() => setViewerStep("confirm")}>
+              戻る
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  };
+
+
+  const renderKanaJumpBar = (refs, membersForList) => {
+    const existingKeys = new Set(membersForList.map(getKanaJumpGroupKey));
+
+    return (
+      <div className="kanaJumpBar">
+        {kanaJumpGroups.map((group) => (
+          <button
+            key={group.key}
+            type="button"
+            className={
+              existingKeys.has(group.key)
+                ? "kanaJumpButton"
+                : "kanaJumpButton disabledKanaJumpButton"
+            }
+            disabled={!existingKeys.has(group.key)}
+            onClick={() => {
+              refs.current[group.key]?.scrollIntoView({
+                behavior: "smooth",
+                block: "start",
+              });
+            }}
+          >
+            {group.label}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
+  const renderGroupedMemberList = ({
+    membersForList,
+    refs,
+    renderMember,
+  }) => {
+    const grouped = membersForList.reduce((acc, member) => {
+      const key = getKanaJumpGroupKey(member);
+
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(member);
+
+      return acc;
+    }, {});
+
+    return (
+      <>
+        {renderKanaJumpBar(refs, membersForList)}
+
+        <div className="groupedMemberList">
+          {kanaJumpGroups.map((group) => {
+            const groupMembers = grouped[group.key] || [];
+
+            if (groupMembers.length === 0) return null;
+
+            return (
+              <div
+                key={group.key}
+                ref={(element) => {
+                  refs.current[group.key] = element;
+                }}
+                className="kanaGroupBlock"
+              >
+                <div className="kanaGroupTitle">{group.label}行</div>
+                <div className="memberGrid modalMemberGrid">
+                  {groupMembers.map(renderMember)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </>
+    );
+  };
+
   const renderAuthScreen = () => {
     return (
       <div className="app authScreen">
@@ -1745,7 +2531,7 @@ export default function App() {
                   onChange={(e) =>
                     setLoginForm({ ...loginForm, password: e.target.value })
                   }
-                  placeholder="ログイン用パスワード"
+                  placeholder="通常または観賞用パスワード"
                 />
               </label>
 
@@ -1847,11 +2633,13 @@ export default function App() {
       <button
         key={member.id}
         className={
-          isSwapSelected(member)
-            ? `playerChip selectedPlayerChip ${genderClass}`
-            : `playerChip ${genderClass}`
+          `${isSwapSelected(member) ? "playerChip selectedPlayerChip" : "playerChip"} ${genderClass} ${
+            isViewerMode && viewerSelectedMemberId === member.id
+              ? "viewerSelfChip"
+              : ""
+          }`
         }
-        onClick={() => handleSwapTap(member, location)}
+        onClick={() => !isViewerMode && handleSwapTap(member, location)}
       >
         <span>{member.nickname || member.name}</span>
 
@@ -1891,9 +2679,11 @@ export default function App() {
                   })
                 )}
               </div>
-              <button className="winButton" onClick={() => setWinner(index, "A")}>
-                勝ち
-              </button>
+              {!isViewerMode && (
+                <button className="winButton" onClick={() => setWinner(index, "A")}>
+                  勝ち
+                </button>
+              )}
             </div>
 
             <div className="vs">VS <span className="courtNumberBadge">{getCircledNumber(courtNumber)}</span></div>
@@ -1910,27 +2700,31 @@ export default function App() {
                   })
                 )}
               </div>
-              <button className="winButton" onClick={() => setWinner(index, "B")}>
-                勝ち
-              </button>
+              {!isViewerMode && (
+                <button className="winButton" onClick={() => setWinner(index, "B")}>
+                  勝ち
+                </button>
+              )}
             </div>
           </div>
         ) : (
           <div className="emptyCourt">空き</div>
         )}
 
-        <div className="row">
-          <button
-            onClick={() =>
-              court?.winner ? confirmCourtResult(index) : generateCourt(index)
-            }
-          >
-            {court?.winner ? "確定" : "新規"}
-          </button>
-          <button className="subButton" onClick={() => clearCourt(index)}>
-            消す
-          </button>
-        </div>
+        {!isViewerMode && (
+          <div className="row">
+            <button
+              onClick={() =>
+                court?.winner ? confirmCourtResult(index) : generateCourt(index)
+              }
+            >
+              {court?.winner ? "確定" : "新規"}
+            </button>
+            <button className="subButton" onClick={() => clearCourt(index)}>
+              消す
+            </button>
+          </div>
+        )}
       </div>
     );
   };
@@ -1966,7 +2760,7 @@ export default function App() {
             onChange={(e) => setForm({ ...form, reading: e.target.value })}
             placeholder="例：たなか"
           />
-          <span className="inputNoteRed">必ずひらがなで入力してください</span>
+          <span className="inputNoteRed">必ずひらがな、数字、英文字で入力してください</span>
         </label>
         {formError && !form.reading.trim() && (
           <p className="errorText">入力してください</p>
@@ -2062,9 +2856,11 @@ export default function App() {
             </button>
           ))}
 
-          <button className="addGroupTab" onClick={startCreateGroup}>
-            グループを追加
-          </button>
+          {!isViewerMode && (
+            <button className="addGroupTab" onClick={startCreateGroup}>
+              グループを追加
+            </button>
+          )}
         </div>
       </div>
     );
@@ -2074,6 +2870,19 @@ export default function App() {
     return renderAuthScreen();
   }
 
+  if (isViewerMode && viewerStep === "confirm") {
+    return renderViewerConfirmScreen();
+  }
+
+  if (isViewerMode && viewerStep === "register") {
+    return renderViewerRegisterScreen();
+  }
+
+  if (isViewerMode && viewerStep === "selectMember") {
+    return renderViewerMemberSelectScreen();
+  }
+
+
   if (screen === "home") {
     return (
       <div className="app homeScreen">
@@ -2081,35 +2890,87 @@ export default function App() {
           <div>
             <div className="circleLabel">ログイン中</div>
             <strong>{currentCircle.circleName}</strong>
+            {isViewerMode && (
+              <span className="viewerModeBadge">観賞用</span>
+            )}
           </div>
-          <button className="logoutButton" onClick={logoutCircle}>
-            ログアウト
-          </button>
+
+          <div className="headerRightButtons">
+            <button className="logoutButton" onClick={logoutCircle}>
+              ログアウト
+            </button>
+          </div>
         </div>
+
+        
+        <p className="adminNoticeText">
+          レート表示ON/OFFやメンバーの削除は管理者設定から行えます
+        </p>
 
         <h1>バドミントン組み合わせアプリ</h1>
 
         {memberLoading && <p className="participantCount">メンバー読み込み中...</p>}
 
-        <button className="bigCreateButton" onClick={startCreateGroup}>
-          新規作成
-        </button>
+        {isViewerMode ? (
+          <p className="viewerNotice">
+            観賞用ログイン中です。組み合わせが作成されると自動で表示されます。
+          </p>
+        ) : (
+          <button className="bigCreateButton" onClick={startCreateGroup}>
+            新規作成
+          </button>
+        )}
       </div>
     );
   }
 
   if (screen === "create") {
+    if (isViewerMode) {
+      return (
+        <div className="app homeScreen">
+          <div className="circleHeader">
+            <div>
+              <div className="circleLabel">ログイン中</div>
+              <strong>{currentCircle.circleName}</strong>
+              <span className="viewerModeBadge">観賞用</span>
+            </div>
+
+            <div className="headerRightButtons">
+              <button className="logoutButton" onClick={logoutCircle}>
+                ログアウト
+              </button>
+            </div>
+          </div>
+
+          <p className="viewerNotice">
+            観賞用ログイン中です。グループ作成はできません。
+          </p>
+        </div>
+      );
+    }
+
     return (
       <div className="app">
         <div className="circleHeader">
           <div>
             <div className="circleLabel">ログイン中</div>
             <strong>{currentCircle.circleName}</strong>
+            {isViewerMode && (
+              <span className="viewerModeBadge">観賞用</span>
+            )}
           </div>
-          <button className="logoutButton" onClick={logoutCircle}>
-            ログアウト
-          </button>
+
+          <div className="headerRightButtons">
+            <button className="logoutButton" onClick={logoutCircle}>
+              ログアウト
+            </button>
+          </div>
         </div>
+
+        
+        <p className="adminNoticeText">
+          レート表示ON/OFFやメンバーの削除は管理者設定から行えます
+        </p>
 
         {renderTabs()}
 
@@ -2177,25 +3038,7 @@ export default function App() {
           </section>
         )}
 
-        <section className="card">
-          <h2>レート表示</h2>
-          <div className="optionGrid">
-            {rateDisplayOptions.map((option) => (
-              <button
-                key={option}
-                onClick={() => setCreateRateDisplay(option)}
-                className={
-                  createRateDisplay === option ? "option selectedOption" : "option"
-                }
-              >
-                {option}
-              </button>
-            ))}
-          </div>
-          {groupError && !createRateDisplay && (
-            <p className="errorText">選択してください</p>
-          )}
-        </section>
+        
         <section className="card">
           <h2>参加回数を表示しますか</h2>
           <div className="optionGrid">
@@ -2266,16 +3109,42 @@ export default function App() {
           <div>
             <div className="circleLabel">ログイン中</div>
             <strong>{currentCircle.circleName}</strong>
+            {isViewerMode && (
+              <span className="viewerModeBadge">観賞用</span>
+            )}
           </div>
-          <button className="logoutButton" onClick={logoutCircle}>
-            ログアウト
-          </button>
+
+          <div className="headerRightButtons">
+{!isViewerMode && (
+              <button
+                className="adminSettingsButton"
+                onClick={openAdminSettings}
+              >
+                管理者設定
+              </button>
+            )}
+
+            <button className="logoutButton" onClick={logoutCircle}>
+              ログアウト
+            </button>
+          </div>
         </div>
 
+        
+        <p className="adminNoticeText">
+          レート表示ON/OFFやメンバーの削除は管理者設定から行えます
+        </p>
+
         <h1>バドミントン組み合わせアプリ</h1>
-        <button className="bigCreateButton" onClick={startCreateGroup}>
-          新規作成
-        </button>
+        {isViewerMode ? (
+          <p className="viewerNotice">
+            観賞用ログイン中です。組み合わせが作成されると自動で表示されます。
+          </p>
+        ) : (
+          <button className="bigCreateButton" onClick={startCreateGroup}>
+            新規作成
+          </button>
+        )}
       </div>
     );
   }
@@ -2283,29 +3152,51 @@ export default function App() {
   return (
     <div className="app">
       <div className="circleHeader">
-        <div>
-          <div className="circleLabel">ログイン中</div>
-          <strong>{currentCircle.circleName}</strong>
-        </div>
-        <button className="logoutButton" onClick={logoutCircle}>
-          ログアウト
-        </button>
-      </div>
+          <div>
+            <div className="circleLabel">ログイン中</div>
+            <strong>{currentCircle.circleName}</strong>
+            {isViewerMode && (
+              <span className="viewerModeBadge">観賞用</span>
+            )}
+          </div>
 
-      {renderTabs()}
+          <div className="headerRightButtons">
+{!isViewerMode && (
+              <button
+                className="adminSettingsButton"
+                onClick={openAdminSettings}
+              >
+                管理者設定
+              </button>
+            )}
+
+            <button className="logoutButton" onClick={logoutCircle}>
+              ログアウト
+            </button>
+          </div>
+        </div>
+
+      
+        <p className="adminNoticeText">
+          レート表示ON/OFFやメンバーの削除は管理者設定から行えます
+        </p>
+
+        {renderTabs()}
 
       <div className="mainTitleRow">
         <h1>{activeGroup.groupName}</h1>
 
-        <div className="mainTitleButtons">
-          <button className="resetTodayButton" onClick={resetTodayState}>
-            本日の状態をリセット
-          </button>
+        {!isViewerMode && (
+          <div className="mainTitleButtons">
+            <button className="resetTodayButton" onClick={resetTodayState}>
+              本日の状態をリセット
+            </button>
 
-          <button className="deleteGroupButton" onClick={deleteActiveGroup}>
-            グループ削除
-          </button>
-        </div>
+            <button className="deleteGroupButton" onClick={deleteActiveGroup}>
+              グループ削除
+            </button>
+          </div>
+        )}
       </div>
 
       <section className="card">
@@ -2314,22 +3205,30 @@ export default function App() {
           <p className="participantCountInline">参加中：{selectedIds.size}人</p>
         </div>
 
-        <div className="memberHeaderButtons">
-          <button
-            className="participationMainButton"
-            onClick={openParticipationModal}
-          >
-            参加
-          </button>
+        {!isViewerMode && (
+          <div className="memberHeaderButtons">
+            <button
+              className="participationMainButton"
+              onClick={openParticipationModal}
+            >
+              参加
+            </button>
 
-          <button onClick={openCourtAddLayoutSelect}>
-            コート追加
-          </button>
+            <button onClick={openCourtAddLayoutSelect}>
+              コート追加
+            </button>
 
-          <button onClick={openCourtDeleteLayoutSelect}>
-            コート削除
-          </button>
-        </div>
+            <button onClick={openCourtDeleteLayoutSelect}>
+              コート削除
+            </button>
+          </div>
+        )}
+
+        {isViewerMode && (
+          <p className="viewerNoticeSmall">
+            観賞用のため、操作ボタンは表示されません。
+          </p>
+        )}
 
         <div className="syncRow">
           <button className="syncButton" onClick={loadGroupsFromFirestore}>
@@ -2343,6 +3242,29 @@ export default function App() {
         {syncMessage && <p className="syncMessage">{syncMessage}</p>}
         {autoSyncStatus && <p className="autoSyncStatus">{autoSyncStatus}</p>}
       </section>
+
+      {isViewerMode && (
+        <section className="viewerStatusCard">
+          <div>
+            <div className="viewerStatusLabel">あなたの状態</div>
+            <strong>
+              {viewerSelectedMember
+                ? viewerSelectedMember.nickname || viewerSelectedMember.name
+                : "未選択"}
+            </strong>
+            <p>{getViewerStatusText()}</p>
+          </div>
+
+          <div className="viewerStatusActions">
+            <button className="subButton" onClick={openViewerMemberSelect}>
+              名前を変更
+            </button>
+            <button onClick={() => setIsViewerGuideOpen(true)}>
+              ？
+            </button>
+          </div>
+        </section>
+      )}
 
       {shouldShowRotateMessage && (
         <p className="rotateScreenHint">
@@ -2373,20 +3295,25 @@ export default function App() {
   <div className="sectionHeader">
     <h2>休憩</h2>
 
-    <div className="restSwapText">
-      タップして入れ替え
-    </div>
+    {!isViewerMode && (
+      <div className="restSwapText">
+        タップして入れ替え
+      </div>
+    )}
   </div>
         <div className="waitingList">
           {waitingMembers.map((member, index) => (
             <button
               key={member.id}
               className={
-                isSwapSelected(member)
-                  ? "waitingChip selectedPlayerChip"
-                  : "waitingChip"
+                `${isSwapSelected(member) ? "waitingChip selectedPlayerChip" : "waitingChip"} ${
+                  isViewerMode && viewerSelectedMemberId === member.id
+                    ? "viewerSelfChip"
+                    : ""
+                }`
               }
               onClick={() =>
+                !isViewerMode &&
                 handleSwapTap(member, {
                   type: "waiting",
                   index,
@@ -2407,6 +3334,543 @@ export default function App() {
         </div>
       </section>
 
+
+      {isViewerGuideOpen && (
+        <div className="modalOverlay">
+          <div className="modal">
+            <h2>観賞用ガイド</h2>
+
+            <div className="viewerGuideList">
+              <p>・緑の枠はあなたの名前です</p>
+              <p>・黄色は勝利ペアです</p>
+              <p>・下の「休憩」にある名前は休憩中です</p>
+              <p>・観賞用では、組み合わせや勝敗確定などの操作はできません</p>
+            </div>
+
+            <div className="bottomActions">
+              <button onClick={() => setIsViewerGuideOpen(false)}>
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isAdminSettingsOpen && (
+        <div className="modalOverlay">
+          <div className="modal">
+            <h2>管理者用設定</h2>
+
+            {!adminUnlocked ? (
+              <>
+                <p className="adminNote">
+                  管理者設定を変更するにはマスターパスワードを入力してください。
+                </p>
+
+                <label>
+                  マスターパスワード
+                  <input
+                    type="password"
+                    value={adminPasswordInput}
+                    onChange={(e) => setAdminPasswordInput(e.target.value)}
+                    placeholder="マスターパスワード"
+                  />
+                </label>
+
+                {adminError && (
+                  <p className="errorText centerText">{adminError}</p>
+                )}
+
+                <div className="bottomActions">
+                  <button onClick={verifyAdminPassword}>確認</button>
+                  <button className="subButton" onClick={closeAdminSettings}>
+                    閉じる
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                {adminPanel === "menu" && (
+                  <>
+                    <p className="adminNote">
+                      管理者メニューを選んでください。
+                    </p>
+
+                    <div className="adminMenuGrid">
+                      <button onClick={() => setAdminPanel("circleName")}>
+                        サークル名変更
+                      </button>
+
+                      <button onClick={() => setAdminPanel("password")}>
+                        パスワード変更
+                      </button>
+
+                      <button onClick={() => setAdminPanel("rateDisplay")}>
+                        レート表示ON/OFF
+                      </button>
+
+                      <button onClick={() => setAdminPanel("member")}>
+                        メンバー編集・削除・レート変更
+                      </button>
+
+                      <button onClick={() => setAdminPanel("rateBase")}>
+                        レート変動値変更
+                      </button>
+
+                      <button onClick={() => setAdminPanel("rankRate")}>
+                        ランク初期値変更
+                      </button>
+
+                      <button onClick={() => setAdminPanel("rateProfile")}>
+                        レート名管理
+                      </button>
+
+                      <button
+                        className="resetRateButton"
+                        onClick={resetAllRates}
+                      >
+                        レート初期化
+                      </button>
+                    </div>
+
+                    <div className="bottomActions">
+                      <button className="subButton" onClick={closeAdminSettings}>
+                        閉じる
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {adminPanel === "circleName" && (
+                  <>
+                    <h3>サークル名変更</h3>
+
+                    <label>
+                      サークル名
+                      <input
+                        value={adminSettingsForm.circleName}
+                        onChange={(e) =>
+                          setAdminSettingsForm({
+                            ...adminSettingsForm,
+                            circleName: e.target.value,
+                          })
+                        }
+                        placeholder="サークル名"
+                      />
+                    </label>
+
+                    {adminError && (
+                      <p className="errorText centerText">{adminError}</p>
+                    )}
+
+                    <div className="bottomActions">
+                      <button onClick={saveAdminSettings}>保存</button>
+                      <button
+                        className="subButton"
+                        onClick={() => setAdminPanel("menu")}
+                      >
+                        戻る
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {adminPanel === "password" && (
+                  <>
+                    <h3>パスワード変更</h3>
+
+                    <label>
+                      通常パスワード
+                      <input
+                        value={adminSettingsForm.password}
+                        onChange={(e) =>
+                          setAdminSettingsForm({
+                            ...adminSettingsForm,
+                            password: e.target.value,
+                          })
+                        }
+                        placeholder="通常ログイン用パスワード"
+                      />
+                    </label>
+
+                    <label>
+                      管理者パスワード
+                      <input
+                        value={adminSettingsForm.masterPassword}
+                        onChange={(e) =>
+                          setAdminSettingsForm({
+                            ...adminSettingsForm,
+                            masterPassword: e.target.value,
+                          })
+                        }
+                        placeholder="管理者用パスワード"
+                      />
+                    </label>
+
+                    <label>
+                      観賞用パスワード
+                      <input
+                        value={adminSettingsForm.viewerPassword}
+                        onChange={(e) =>
+                          setAdminSettingsForm({
+                            ...adminSettingsForm,
+                            viewerPassword: e.target.value,
+                          })
+                        }
+                        placeholder="未設定でもOK"
+                      />
+                      <span className="adminSmallNote">
+                        観賞モード実装時に使用します
+                      </span>
+                    </label>
+
+                    {adminError && (
+                      <p className="errorText centerText">{adminError}</p>
+                    )}
+
+                    <div className="bottomActions">
+                      <button onClick={saveAdminSettings}>保存</button>
+                      <button
+                        className="subButton"
+                        onClick={() => setAdminPanel("menu")}
+                      >
+                        戻る
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {adminPanel === "rateDisplay" && (
+                  <>
+                    <h3>レート表示ON/OFF</h3>
+
+                    <div className="formBlock">
+                      <div className="formTitle">レートを表示しますか</div>
+                      <div className="optionGrid">
+                        {rateDisplayOptions.map((option) => (
+                          <button
+                            key={option}
+                            onClick={() =>
+                              setAdminSettingsForm({
+                                ...adminSettingsForm,
+                                defaultRateDisplay: option,
+                              })
+                            }
+                            className={
+                              adminSettingsForm.defaultRateDisplay === option
+                                ? "option selectedOption"
+                                : "option"
+                            }
+                          >
+                            {option}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <p className="adminSmallNote">
+                      今後の管理者設定・観賞モードで使う全体設定です。
+                    </p>
+
+                    {adminError && (
+                      <p className="errorText centerText">{adminError}</p>
+                    )}
+
+                    <div className="bottomActions">
+                      <button onClick={saveAdminSettings}>保存</button>
+                      <button
+                        className="subButton"
+                        onClick={() => setAdminPanel("menu")}
+                      >
+                        戻る
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                
+                {adminPanel === "rateBase" && (
+                  <>
+                    <h3>レート変動値変更</h3>
+
+                    <p className="adminSmallNote">
+                      現在の基本変動値：{rateChangeBase}
+                    </p>
+
+                    <div className="optionGrid">
+                      {[20, 40, 60, 80, 100].map((value) => (
+                        <button
+                          key={value}
+                          onClick={() => setRateChangeBase(value)}
+                          className={
+                            rateChangeBase === value
+                              ? "option selectedOption"
+                              : "option"
+                          }
+                        >
+                          {value}
+                        </button>
+                      ))}
+                    </div>
+
+                    <button
+                      className="resetSettingButton"
+                      onClick={() => setRateChangeBase(DEFAULT_RATE_CHANGE_BASE)}
+                    >
+                      初期値に戻す
+                    </button>
+
+                    <div className="bottomActions">
+                      <button onClick={saveAdminSettings}>
+                        保存
+                      </button>
+
+                      <button
+                        className="subButton"
+                        onClick={() => setAdminPanel("menu")}
+                      >
+                        戻る
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {adminPanel === "rankRate" && (
+                  <>
+                    <h3>ランク初期値変更</h3>
+
+                    <div className="adminRankRateList">
+                      {Object.entries(rankInitialRates).map(([rank, rate]) => (
+                        <label key={rank} className="adminRankRateItem">
+                          <span>{rank}</span>
+
+                          <input
+                            type="number"
+                            value={rate}
+                            onChange={(e) =>
+                              setRankInitialRates({
+                                ...rankInitialRates,
+                                [rank]: Number(e.target.value),
+                              })
+                            }
+                          />
+                        </label>
+                      ))}
+                    </div>
+
+                    <button
+                      className="resetSettingButton"
+                      onClick={() => setRankInitialRates(DEFAULT_RANK_INITIAL_RATES)}
+                    >
+                      初期値に戻す
+                    </button>
+
+                    <div className="bottomActions">
+                      <button onClick={saveAdminSettings}>
+                        保存
+                      </button>
+
+                      <button
+                        className="subButton"
+                        onClick={() => setAdminPanel("menu")}
+                      >
+                        戻る
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {adminPanel === "rateProfile" && (
+                  <>
+                    <h3>レート名管理</h3>
+
+                    <p className="adminSmallNote">
+                      例：通常 / 初級 / 上級 など
+                    </p>
+
+                    <div className="adminRateProfileList">
+                      {rateProfiles.map((profile, index) => (
+                        <input
+                          key={index}
+                          value={profile}
+                          onChange={(e) => {
+                            const next = [...rateProfiles];
+                            next[index] = e.target.value;
+                            setRateProfiles(next);
+                          }}
+                        />
+                      ))}
+                    </div>
+
+                    <div className="bottomActions">
+                      <button onClick={saveAdminSettings}>
+                        保存
+                      </button>
+
+                      <button
+                        className="subButton"
+                        onClick={() => setAdminPanel("menu")}
+                      >
+                        戻る
+                      </button>
+                    </div>
+                  </>
+                )}
+
+{adminPanel === "member" && (
+                  <>
+                    <h3>メンバー編集・削除・レート変更</h3>
+
+                    <p className="adminSmallNote">
+                      メンバーを選ぶと、名前・読み方・性別・ランク・レートを変更できます。
+                    </p>
+
+                    {renderGroupedMemberList({
+                      membersForList: sortedMembers,
+                      refs: adminGroupRefs,
+                      renderMember: (member) => (
+                        <button
+                          key={member.id}
+                          className="member"
+                          onClick={() => openAdminMemberEdit(member)}
+                        >
+                          <strong>{member.nickname || member.name}</strong>
+                          <span>ランク：{member.rank || "未設定"}</span>
+                          <span>レート：{getMemberRate(member)}</span>
+                        </button>
+                      ),
+                    })}
+
+                    <div className="bottomActions">
+                      <button
+                        className="subButton"
+                        onClick={() => setAdminPanel("menu")}
+                      >
+                        戻る
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {selectedAdminMember && (
+        <div className="modalOverlay">
+          <div className="modal">
+            <h2>メンバー編集・削除</h2>
+
+            <label>
+              ニックネーム
+              <input
+                value={adminMemberEditForm.nickname}
+                onChange={(e) =>
+                  setAdminMemberEditForm({
+                    ...adminMemberEditForm,
+                    nickname: e.target.value,
+                  })
+                }
+              />
+            </label>
+
+            <label>
+              読み方
+              <input
+                value={adminMemberEditForm.reading}
+                onChange={(e) =>
+                  setAdminMemberEditForm({
+                    ...adminMemberEditForm,
+                    reading: e.target.value,
+                  })
+                }
+              />
+              <span className="inputNoteRed">必ずひらがな、数字、英文字で入力してください</span>
+            </label>
+
+            <div className="formBlock">
+              <div className="formTitle">性別</div>
+              <div className="optionGrid">
+                {genderOptions.map((gender) => (
+                  <button
+                    key={gender}
+                    onClick={() =>
+                      setAdminMemberEditForm({
+                        ...adminMemberEditForm,
+                        gender,
+                      })
+                    }
+                    className={
+                      adminMemberEditForm.gender === gender
+                        ? "option selectedOption"
+                        : "option"
+                    }
+                  >
+                    {gender}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="formBlock">
+              <div className="formTitle">ランク</div>
+              <div className="rankGrid">
+                {rankOptions.map((rank) => (
+                  <button
+                    key={rank}
+                    onClick={() =>
+                      setAdminMemberEditForm({
+                        ...adminMemberEditForm,
+                        rank,
+                      })
+                    }
+                    className={
+                      adminMemberEditForm.rank === rank
+                        ? "rankOption selectedRankOption"
+                        : "rankOption"
+                    }
+                  >
+                    <span>{rank}</span>
+                    <span className="rankRate">初期R{getInitialRate(rank)}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="adminSmallNote">
+                ランクを変更しても、レートは自動変更されません。
+              </p>
+            </div>
+
+            <label>
+              レート
+              <input
+                type="number"
+                value={adminMemberEditForm.rate}
+                onChange={(e) =>
+                  setAdminMemberEditForm({
+                    ...adminMemberEditForm,
+                    rate: e.target.value,
+                  })
+                }
+              />
+            </label>
+{adminMemberEditError && (
+              <p className="errorText centerText">{adminMemberEditError}</p>
+            )}
+
+            <div className="bottomActions">
+              <button onClick={saveAdminMemberEdit}>保存</button>
+              <button className="subButton" onClick={() => { closeAdminMemberEdit(); setAdminPanel("menu"); }}>
+                戻る
+              </button>
+            </div>
+
+            <button className="deleteInEditButton" onClick={deleteAdminMember}>
+              削除
+            </button>
+          </div>
+        </div>
+      )}
 
       {layoutChangeMode && pendingCourtCount && (
         <div className="modalOverlay">
@@ -2518,8 +3982,10 @@ export default function App() {
                 isEdit: true,
               })}
 
-            <div className="memberGrid modalMemberGrid">
-              {filteredMembers.map((member) => {
+            {renderGroupedMemberList({
+              membersForList: filteredMembers,
+              refs: participationGroupRefs,
+              renderMember: (member) => {
                 const isSelected = tempSelectedIds.includes(member.id);
                 const isOnCourt = onCourtIds.has(member.id);
 
@@ -2554,8 +4020,8 @@ export default function App() {
                     )}
                   </button>
                 );
-              })}
-            </div>
+              },
+            })}
 
             <div className="bottomActions">
               <button onClick={decideParticipation}>決定</button>

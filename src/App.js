@@ -3256,11 +3256,9 @@ export default function App() {
           </div>
 
           <div className="viewerStatusActions">
-            <button className="subButton" onClick={openViewerMemberSelect}>
-              名前を変更
-            </button>
-            <button onClick={() => setIsViewerGuideOpen(true)}>
-              ？
+          
+                      <button onClick={() => setIsViewerGuideOpen(true)}>
+              使い方
             </button>
           </div>
         </section>

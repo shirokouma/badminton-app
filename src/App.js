@@ -251,6 +251,8 @@ const DEFAULT_RANK_INITIAL_RATES = { ...rankRateMap };
 
 const DEFAULT_RATE_PROFILES = ["通常", "初級", "中級", "上級"];
 
+const CREATE_CIRCLE_KEY = "232355";
+
 const kanaJumpGroups = [
   { key: "あ", label: "あ", chars: ["あ", "い", "う", "え", "お"] },
   { key: "か", label: "か", chars: ["か", "き", "く", "け", "こ", "が", "ぎ", "ぐ", "げ", "ご"] },
@@ -540,6 +542,8 @@ export default function App() {
     circleId: "",
     password: "",
     masterPassword: "",
+    viewerPassword: "",
+    createKey: "",
   });
 
   const [screen, setScreen] = useState("home");
@@ -574,6 +578,9 @@ export default function App() {
   const [editDuplicateNicknameError, setEditDuplicateNicknameError] = useState("");
   const [editDeleteError, setEditDeleteError] = useState("");
   const [isEditSelectMode, setIsEditSelectMode] = useState(false);
+
+  const [isPlayCountModalOpen, setIsPlayCountModalOpen] = useState(false);
+  const [tempPlayCounts, setTempPlayCounts] = useState({});
 
   const [syncMessage, setSyncMessage] = useState("");
   const [lastSyncTime, setLastSyncTime] = useState("");
@@ -768,7 +775,7 @@ export default function App() {
     nextGroups = groups,
     nextActiveGroupId = activeGroupId
   ) => {
-    if (!currentCircle) return;
+    if (!currentCircle) return false;
 
     try {
       const syncRef = getSyncDocRef(currentCircle.circleId);
@@ -781,9 +788,11 @@ export default function App() {
 
       setLastSyncTime(formatSyncTime());
       setSyncMessage("同期しました");
+      return true;
     } catch (error) {
       console.error("同期保存失敗", error);
       setSyncMessage("同期に失敗しました");
+      return false;
     }
   };
 
@@ -823,9 +832,16 @@ export default function App() {
     const circleId = normalizeCircleId(createCircleForm.circleId);
     const password = createCircleForm.password.trim();
     const masterPassword = createCircleForm.masterPassword.trim();
+    const viewerPassword = createCircleForm.viewerPassword.trim();
+    const createKey = createCircleForm.createKey.trim();
 
-    if (!circleName || !circleId || !password || !masterPassword) {
+    if (!circleName || !circleId || !password || !masterPassword || !viewerPassword || !createKey) {
       setAuthError("すべて入力してください");
+      return;
+    }
+
+    if (createKey !== CREATE_CIRCLE_KEY) {
+      setAuthError("サークル作成キーが違います");
       return;
     }
 
@@ -847,7 +863,7 @@ export default function App() {
         circleId,
         password,
         masterPassword,
-        viewerPassword: "",
+        viewerPassword,
         defaultRateDisplay: "あり",
         rateChangeBase: DEFAULT_RATE_CHANGE_BASE,
         rankInitialRates: DEFAULT_RANK_INITIAL_RATES,
@@ -878,6 +894,8 @@ export default function App() {
         circleId: "",
         password: "",
         masterPassword: "",
+        viewerPassword: "",
+        createKey: "",
       });
     } catch (error) {
       setAuthError("サークル作成に失敗しました");
@@ -992,6 +1010,7 @@ export default function App() {
     setScreen("home");
     setIsParticipationModalOpen(false);
     setTempSelectedIds([]);
+
   };
 
   const updateActiveGroup = (updater) => {
@@ -1087,6 +1106,10 @@ export default function App() {
       return nickname.includes(keyword) || reading.includes(keyword);
     });
   }, [sortedMembers, memberSearch]);
+
+  const activePlayCountMembers = useMemo(() => {
+    return sortedMembers.filter((member) => selectedIds.has(member.id));
+  }, [sortedMembers, selectedIds]);
 
 
   const applyCourtLayoutChange = async (layoutId) => {
@@ -1192,6 +1215,7 @@ export default function App() {
     setEditingMemberId(null);
     setEditDeleteError("");
     setIsEditSelectMode(false);
+
   };
 
   const deleteActiveGroup = async () => {
@@ -1633,6 +1657,71 @@ export default function App() {
     setLayoutChangeMode("delete");
   };
 
+
+  const normalizePlayCountValue = (value) => {
+    return Math.max(0, Math.floor(Number(value) || 0));
+  };
+
+  const openPlayCountModal = () => {
+    const nextTempPlayCounts = {};
+
+    activePlayCountMembers.forEach((member) => {
+      nextTempPlayCounts[member.id] = normalizePlayCountValue(
+        playCounts[member.id]
+      );
+    });
+
+    setTempPlayCounts(nextTempPlayCounts);
+    setIsPlayCountModalOpen(true);
+  };
+
+  const closePlayCountModal = () => {
+    setIsPlayCountModalOpen(false);
+    setTempPlayCounts({});
+  };
+
+  const changeTempPlayCount = (memberId, amount) => {
+    setTempPlayCounts((prevCounts) => ({
+      ...prevCounts,
+      [memberId]: normalizePlayCountValue(prevCounts[memberId]) + amount < 0
+        ? 0
+        : normalizePlayCountValue(prevCounts[memberId]) + amount,
+    }));
+  };
+
+  const savePlayCounts = async () => {
+    if (!activeGroup) return;
+
+    const nextGroups = groups.map((group) => {
+      if (group.id !== activeGroupId) return group;
+
+      const nextPlayCounts = { ...(group.playCounts || {}) };
+
+      activePlayCountMembers.forEach((member) => {
+        nextPlayCounts[member.id] = normalizePlayCountValue(
+          tempPlayCounts[member.id]
+        );
+      });
+
+      return {
+        ...group,
+        playCounts: nextPlayCounts,
+        selectedSwap: null,
+      };
+    });
+
+    setGroups(nextGroups);
+
+    const saved = await saveGroupsToFirestore(nextGroups, activeGroupId);
+
+    if (saved) {
+      setSyncMessage("参加回数を保存・同期しました");
+      closePlayCountModal();
+    } else {
+      setSyncMessage("参加回数の同期に失敗しました");
+    }
+  };
+
   const openParticipationModal = () => {
     const ids = new Set();
 
@@ -1676,6 +1765,7 @@ export default function App() {
     setEditDuplicateNicknameError("");
     setEditDeleteError("");
     setIsEditSelectMode(false);
+
   };
 
   const toggleTempMember = (member) => {
@@ -2573,6 +2663,7 @@ export default function App() {
                   }
                   placeholder="例：osaka-badminton"
                 />
+                <span className="inputNoteRed">決定後は変更できません</span>
               </label>
 
               <label>
@@ -2586,8 +2677,9 @@ export default function App() {
                       password: e.target.value,
                     })
                   }
-                  placeholder="管理者で共有するパスワード"
+                  placeholder="通常ログイン用パスワード"
                 />
+                <span className="authInputNote">通常ログイン用のパスワードです</span>
               </label>
 
               <label>
@@ -2601,8 +2693,47 @@ export default function App() {
                       masterPassword: e.target.value,
                     })
                   }
-                  placeholder="削除・レート編集用"
+                  placeholder="管理者設定用パスワード"
                 />
+                <span className="authInputNote">
+                  メンバー削除、レート表示ON/OFF、個人または全体のレート調整などの管理者設定用パスワードです
+                </span>
+              </label>
+
+              <label>
+                メンバー登録・観賞用パスワード
+                <input
+                  type="password"
+                  value={createCircleForm.viewerPassword}
+                  onChange={(e) =>
+                    setCreateCircleForm({
+                      ...createCircleForm,
+                      viewerPassword: e.target.value,
+                    })
+                  }
+                  placeholder="参加者・観賞用パスワード"
+                />
+                <span className="authInputNote">
+                  参加者がメンバー登録をしたり、参加や休憩を見るためのパスワードです
+                </span>
+              </label>
+
+              <label>
+                サークル作成キー
+                <input
+                  type="password"
+                  value={createCircleForm.createKey}
+                  onChange={(e) =>
+                    setCreateCircleForm({
+                      ...createCircleForm,
+                      createKey: e.target.value,
+                    })
+                  }
+                  placeholder="EYから共有されたキー"
+                />
+                <span className="authInputNote">
+                  ※サークル作成の際は、必ずEYへご連絡ください
+                </span>
               </label>
 
               {authError && <p className="errorText centerText">{authError}</p>}
@@ -2760,7 +2891,7 @@ export default function App() {
             onChange={(e) => setForm({ ...form, reading: e.target.value })}
             placeholder="例：たなか"
           />
-          <span className="inputNoteRed">必ずひらがな、数字、英文字で入力してください</span>
+          <span className="inputNoteRed">必ずひらがなで入力してください</span>
         </label>
         {formError && !form.reading.trim() && (
           <p className="errorText">入力してください</p>
@@ -3230,6 +3361,7 @@ export default function App() {
           </p>
         )}
 
+
         <div className="syncRow">
           <button className="syncButton" onClick={loadGroupsFromFirestore}>
             同期
@@ -3256,9 +3388,11 @@ export default function App() {
           </div>
 
           <div className="viewerStatusActions">
-          
-                      <button onClick={() => setIsViewerGuideOpen(true)}>
-              使い方
+            <button className="subButton" onClick={openViewerMemberSelect}>
+              名前を変更
+            </button>
+            <button onClick={() => setIsViewerGuideOpen(true)}>
+              ？
             </button>
           </div>
         </section>
@@ -3294,8 +3428,14 @@ export default function App() {
     <h2>休憩</h2>
 
     {!isViewerMode && (
-      <div className="restSwapText">
-        タップして入れ替え
+      <div className="restHeaderRight">
+        <button className="playCountEditButton" onClick={openPlayCountModal}>
+          参加回数変更
+        </button>
+
+        <div className="restSwapText">
+          タップして入れ替え
+        </div>
       </div>
     )}
   </div>
@@ -3348,6 +3488,64 @@ export default function App() {
             <div className="bottomActions">
               <button onClick={() => setIsViewerGuideOpen(false)}>
                 閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isPlayCountModalOpen && (
+        <div className="modalOverlay">
+          <div className="modal">
+            <h2>参加回数変更</h2>
+
+            <div className="playCountEditGrid">
+              {activePlayCountMembers.map((member) => (
+                <div key={member.id} className="playCountEditCard">
+                  <strong className="playCountEditName">
+                    {member.nickname || member.name}
+                  </strong>
+
+                  <div className="playCountEditCount">
+                    参加{tempPlayCounts[member.id] || 0}回
+                  </div>
+
+                  <div className="playCountEditActions">
+                    <button
+                      className="playCountNumberButton"
+                      onClick={() => changeTempPlayCount(member.id, -1)}
+                    >
+                      −
+                    </button>
+
+                    <input
+                      className="playCountValueInput"
+                      type="number"
+                      min="0"
+                      value={tempPlayCounts[member.id] || 0}
+                      onChange={(e) =>
+                        setTempPlayCounts({
+                          ...tempPlayCounts,
+                          [member.id]: normalizePlayCountValue(e.target.value),
+                        })
+                      }
+                    />
+
+                    <button
+                      className="playCountNumberButton"
+                      onClick={() => changeTempPlayCount(member.id, 1)}
+                    >
+                      ＋
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="bottomActions">
+              <button onClick={savePlayCounts}>決定</button>
+              <button className="subButton" onClick={closePlayCountModal}>
+                もどる
               </button>
             </div>
           </div>
@@ -3784,7 +3982,7 @@ export default function App() {
                   })
                 }
               />
-              <span className="inputNoteRed">必ずひらがな、数字、英文字で入力してください</span>
+              <span className="inputNoteRed">必ずひらがなで入力してください</span>
             </label>
 
             <div className="formBlock">

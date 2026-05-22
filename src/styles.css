@@ -1274,3 +1274,158 @@ button:disabled {
   font-weight: bold;
   margin: 8px 0;
 }
+
+
+.authInputNote {
+  display: block;
+  margin-top: 4px;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: bold;
+  line-height: 1.5;
+}
+
+
+.playCountEditModeButton {
+  background: #0f766e;
+  color: white;
+  border-radius: 12px;
+  font-weight: bold;
+}
+
+.activePlayCountEditModeButton {
+  background: #115e59;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.25);
+}
+
+.playCountEditButtons {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.playCountEditButtons button {
+  background: #e0f2fe;
+  color: #075985;
+}
+.restHeaderRight {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.playCountEditButton {
+  background: #1e3a8a;
+  color: white;
+  font-size: 13px;
+  padding: 8px 12px;
+}
+
+.playCountEditGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.playCountEditCard {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 10px;
+  text-align: center;
+}
+
+.playCountEditName {
+  display: block;
+  color: #111827;
+  margin-bottom: 6px;
+}
+
+.playCountEditCount {
+  color: #4b5563;
+  font-size: 13px;
+  font-weight: bold;
+  margin-bottom: 8px;
+}
+
+.playCountEditActions {
+  display: grid;
+  grid-template-columns: 36px 1fr 36px;
+  gap: 6px;
+  align-items: center;
+}
+
+.playCountNumberButton {
+  padding: 8px 0;
+  border-radius: 10px;
+  font-size: 16px;
+}
+
+.playCountValueInput {
+  margin-top: 0;
+  padding: 8px;
+  text-align: center;
+}
+.restHeaderRight {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.playCountEditButton {
+  background: #1e3a8a;
+  color: white;
+  font-size: 13px;
+  padding: 8px 12px;
+}
+
+.playCountEditGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.playCountEditCard {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 10px;
+  text-align: center;
+}
+
+.playCountEditName {
+  display: block;
+  color: #111827;
+  margin-bottom: 6px;
+}
+
+.playCountEditCount {
+  color: #4b5563;
+  font-size: 13px;
+  font-weight: bold;
+  margin-bottom: 8px;
+}
+
+.playCountEditActions {
+  display: grid;
+  grid-template-columns: 36px 1fr 36px;
+  gap: 6px;
+  align-items: center;
+}
+
+.playCountNumberButton {
+  padding: 8px 0;
+  border-radius: 10px;
+  font-size: 16px;
+}
+
+.playCountValueInput {
+  margin-top: 0;
+  padding: 8px;
+  text-align: center;
+}

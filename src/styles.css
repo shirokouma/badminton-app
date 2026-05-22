@@ -913,3 +913,364 @@ button:disabled {
   font-size: 16px;
   font-weight: 900;
 }
+
+
+.adminSettingsButton {
+  background: #1e3a8a;
+  color: white;
+  border: 1px solid #172554;
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+
+.headerRightButtons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.adminSettingsButton {
+  background: #1e3a8a;
+  color: white;
+  border: 1px solid #172554;
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.adminNote {
+  color: #374151;
+  font-size: 13px;
+  font-weight: bold;
+  margin: 0 0 12px;
+}
+
+.adminSettingBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.adminSmallNote {
+  display: block;
+  margin-top: 4px;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+
+/* 管理者用設定：ログアウト横 */
+.circleHeader {
+  background: white;
+  border-radius: 16px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: nowrap;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+
+.headerRightButtons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+
+.adminSettingsButton {
+  background: #1e3a8a;
+  color: white;
+  border: 1px solid #172554;
+  font-size: 12px;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+
+.adminNote {
+  color: #374151;
+  font-size: 13px;
+  font-weight: bold;
+  margin: 0 0 12px;
+}
+
+.adminSettingBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.adminSmallNote {
+  display: block;
+  margin-top: 4px;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+
+.adminRateSection {
+  margin-top: 18px;
+}
+
+.adminMemberGrid {
+  display: grid;
+  grid-template-columns: repeat(2,1fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.resetRateButton {
+  margin-top: 12px;
+  width: 100%;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.adminMenuGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.adminRateSection {
+  margin-top: 18px;
+}
+
+.adminMemberGrid {
+  display: grid;
+  grid-template-columns: repeat(2,1fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.resetRateButton {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+
+
+/* 管理者設定ボタンはログアウト横だけに表示 */
+.headerRightButtons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+
+.adminSettingsButton {
+  background: #1e3a8a;
+  color: white;
+  border: 1px solid #172554;
+  font-size: 12px;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+
+.adminRankRateList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.adminRankRateItem {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.adminRankRateItem span {
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.adminRateProfileList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+
+.resetSettingButton {
+  width: 100%;
+  margin-top: 12px;
+  background: #e5e7eb;
+  color: #111827;
+}
+
+
+.adminNoticeText {
+  margin: 8px 0 12px;
+  font-size: 13px;
+  color: #374151;
+  font-weight: bold;
+  text-align: center;
+  line-height: 1.6;
+}
+
+
+.viewerModeBadge {
+  display: inline-block;
+  margin-left: 8px;
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.viewerNotice {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+  border-radius: 14px;
+  padding: 12px;
+  font-size: 14px;
+  font-weight: bold;
+  text-align: center;
+  line-height: 1.6;
+}
+
+.viewerNoticeSmall {
+  margin: 10px 0 0;
+  color: #047857;
+  font-size: 13px;
+  font-weight: bold;
+}
+
+
+.viewerConfirmCard {
+  text-align: center;
+}
+
+.viewerConfirmText {
+  font-size: 15px;
+  font-weight: bold;
+  color: #374151;
+  line-height: 1.7;
+}
+
+.viewerConfirmActions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+
+.viewerStatusCard {
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: 16px;
+  padding: 12px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.viewerStatusCard p {
+  margin: 4px 0 0;
+  color: #047857;
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.viewerStatusLabel {
+  color: #047857;
+  font-size: 12px;
+  font-weight: bold;
+  margin-bottom: 2px;
+}
+
+.viewerStatusActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.viewerStatusActions button {
+  white-space: nowrap;
+}
+
+.viewerSelfChip {
+  border: 3px solid #10b981 !important;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+}
+
+.viewerGuideList {
+  background: #f9fafb;
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.viewerGuideList p {
+  margin: 8px 0;
+  color: #374151;
+  font-weight: bold;
+  line-height: 1.6;
+}
+
+
+.kanaJumpBar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: white;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 8px 0;
+  margin: 8px 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.kanaJumpButton {
+  min-width: 42px;
+  padding: 8px 10px;
+  background: #1e3a8a;
+  color: white;
+  border-radius: 999px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.disabledKanaJumpButton {
+  background: #e5e7eb;
+  color: #9ca3af;
+}
+
+.groupedMemberList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.kanaGroupBlock {
+  scroll-margin-top: 72px;
+}
+
+.kanaGroupTitle {
+  background: #f3f4f6;
+  color: #374151;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: bold;
+  margin: 8px 0;
+}

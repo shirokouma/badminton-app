@@ -47,7 +47,8 @@ function makeBestGame(
   opponentHistory,
   relationshipHistory,
   courtGroupHistory,
-  playCounts
+  playCounts,
+  playCountSpreadLimit = 2
 ) {
   if (waitingMembers.length < 4) return null;
 
@@ -131,9 +132,12 @@ function makeBestGame(
               );
             }, 0);
 
+            const normalizedPlayCountSpreadLimit =
+              playCountSpreadLimit === "none" ? 999 : Number(playCountSpreadLimit) || 2;
+
             const playCountSpreadPenalty = Math.max(
               0,
-              groupMaxPlayCount - groupMinPlayCount - 2
+              groupMaxPlayCount - groupMinPlayCount - normalizedPlayCountSpreadLimit
             );
 
             const allCourtPairs = getAllPairs(group);
@@ -218,6 +222,12 @@ const groupNameOptions = [
 
 const genderOptions = ["男", "女", "なし"];
 const rateDisplayOptions = ["なし", "あり"];
+const playCountSpreadOptions = [
+  { label: "1回まで", value: 1, note: "かなり公平" },
+  { label: "2回まで", value: 2, note: "標準" },
+  { label: "3回まで", value: 3, note: "交流優先" },
+  { label: "気にしない", value: "none", note: "レート・ペア重複優先" },
+];
 
 const rankOptions = [
   "バドミントンのルール知らない",
@@ -486,6 +496,7 @@ function createGroupObject({
   rateDisplay,
   playCountVisible,
   pointRule,
+  playCountSpreadLimit = 2,
 }) {
   return {
     id: Date.now().toString(),
@@ -495,6 +506,7 @@ function createGroupObject({
     rateDisplay,
     playCountVisible,
     pointRule,
+    playCountSpreadLimit,
     createdAt: Date.now(),
     waitingMembers: [],
     courts: Array.from({ length: Number(courtCount) }, () => null),
@@ -558,6 +570,7 @@ export default function App() {
   const [createRateDisplay, setCreateRateDisplay] = useState("");
   const [createPlayCountVisible, setCreatePlayCountVisible] = useState("");
   const [createPointRule, setCreatePointRule] = useState("");
+  const [createPlayCountSpreadLimit, setCreatePlayCountSpreadLimit] = useState("");
   const [groupError, setGroupError] = useState(false);
 
   const [layoutChangeMode, setLayoutChangeMode] = useState(null);
@@ -581,10 +594,13 @@ export default function App() {
 
   const [isPlayCountModalOpen, setIsPlayCountModalOpen] = useState(false);
   const [tempPlayCounts, setTempPlayCounts] = useState({});
+  const [tempPlayCountSpreadLimit, setTempPlayCountSpreadLimit] = useState(2);
 
   const [syncMessage, setSyncMessage] = useState("");
   const [lastSyncTime, setLastSyncTime] = useState("");
   const [autoSyncStatus, setAutoSyncStatus] = useState("");
+  const [confirmingCourtIndex, setConfirmingCourtIndex] = useState(null);
+  const [courtResultMessage, setCourtResultMessage] = useState("");
 
   const [isAdminSettingsOpen, setIsAdminSettingsOpen] = useState(false);
   const [adminPasswordInput, setAdminPasswordInput] = useState("");
@@ -1034,6 +1050,7 @@ export default function App() {
   const relationshipHistory = activeGroup?.relationshipHistory || {};
   const courtGroupHistory = activeGroup?.courtGroupHistory || {};
   const playCounts = activeGroup?.playCounts || {};
+  const playCountSpreadLimit = activeGroup?.playCountSpreadLimit ?? 2;
   const selectedSwap = activeGroup?.selectedSwap || null;
   const isRateVisible = activeGroup?.rateDisplay === "あり";
   const isPlayCountVisible = activeGroup?.playCountVisible === "あり";
@@ -1160,6 +1177,7 @@ export default function App() {
     setCreateLayoutId("");
     setCreatePlayCountVisible("");
     setCreatePointRule("");
+    setCreatePlayCountSpreadLimit("");
     setGroupError(false);
   };
 
@@ -1180,7 +1198,8 @@ export default function App() {
       !createCourtCount ||
       !createLayoutId ||
       !createPlayCountVisible ||
-      !createPointRule
+      !createPointRule ||
+      !createPlayCountSpreadLimit
     ) {
       setGroupError(true);
       return;
@@ -1193,6 +1212,7 @@ export default function App() {
       rateDisplay: currentCircle?.defaultRateDisplay || "あり",
       playCountVisible: createPlayCountVisible,
       pointRule: createPointRule,
+      playCountSpreadLimit: createPlayCountSpreadLimit,
     });
 
     const nextGroups = [...groups, newGroup];
@@ -1580,6 +1600,24 @@ export default function App() {
         rateProfiles: nextRateProfiles,
       });
 
+      const nextGroupsForRateDisplay = groups.map((group) => ({
+        ...group,
+        rateDisplay: nextDefaultRateDisplay,
+      }));
+
+      if (nextGroupsForRateDisplay.length > 0) {
+        const syncRef = doc(db, "circles", nextCircleId, "sync", "current");
+
+        await setDoc(syncRef, {
+          groups: nextGroupsForRateDisplay,
+          activeGroupId,
+          updatedAt: serverTimestamp(),
+        });
+
+        setGroups(nextGroupsForRateDisplay);
+        setLastSyncTime(formatSyncTime());
+      }
+
       setAdminError("");
       setSyncMessage("管理者設定を保存しました");
       setAdminPanel("menu");
@@ -1672,12 +1710,14 @@ export default function App() {
     });
 
     setTempPlayCounts(nextTempPlayCounts);
+    setTempPlayCountSpreadLimit(activeGroup?.playCountSpreadLimit ?? 2);
     setIsPlayCountModalOpen(true);
   };
 
   const closePlayCountModal = () => {
     setIsPlayCountModalOpen(false);
     setTempPlayCounts({});
+    setTempPlayCountSpreadLimit(2);
   };
 
   const changeTempPlayCount = (memberId, amount) => {
@@ -1706,6 +1746,7 @@ export default function App() {
       return {
         ...group,
         playCounts: nextPlayCounts,
+        playCountSpreadLimit: tempPlayCountSpreadLimit,
         selectedSwap: null,
       };
     });
@@ -2074,7 +2115,8 @@ export default function App() {
       opponentHistory,
       relationshipHistory,
       courtGroupHistory,
-      playCounts
+      playCounts,
+      playCountSpreadLimit
     );
 
     if (!game) return;
@@ -2148,7 +2190,7 @@ export default function App() {
     await saveGroupsToFirestore(nextGroups, activeGroupId);
   };
 
-  const setWinner = (index, winner) => {
+  const setWinner = async (index, winner) => {
     const targetCourt = courts[index];
     if (!targetCourt) return;
 
@@ -2158,16 +2200,39 @@ export default function App() {
       winner,
     };
 
-    updateActiveGroup({
-      courts: newCourts,
+    const nextGroups = groups.map((group) => {
+      if (group.id !== activeGroupId) return group;
+
+      return {
+        ...group,
+        courts: newCourts,
+        selectedSwap: null,
+      };
     });
+
+    setGroups(nextGroups);
+    setCourtResultMessage("");
+
+    await saveGroupsToFirestore(nextGroups, activeGroupId);
   };
 
   const confirmCourtResult = async (index) => {
     if (!currentCircle) return;
+    if (confirmingCourtIndex !== null) return;
 
-    const targetCourt = courts[index];
-    if (!targetCourt || !targetCourt.winner) return;
+    const latestActiveGroup =
+      groups.find((group) => group.id === activeGroupId) || activeGroup;
+    const targetCourt = latestActiveGroup?.courts?.[index] || courts[index];
+
+    if (!targetCourt) return;
+
+    if (!targetCourt.winner) {
+      setCourtResultMessage("勝ちを選んでから確定してください");
+      return;
+    }
+
+    setConfirmingCourtIndex(index);
+    setCourtResultMessage("確定中です...");
 
     const winnerTeam =
       targetCourt.winner === "A" ? targetCourt.teamA : targetCourt.teamB;
@@ -2251,9 +2316,18 @@ export default function App() {
 
       setGroups(nextGroups);
 
-      await saveGroupsToFirestore(nextGroups, activeGroupId);
+      const saved = await saveGroupsToFirestore(nextGroups, activeGroupId);
+
+      if (saved) {
+        setCourtResultMessage("試合結果を確定しました");
+      } else {
+        setCourtResultMessage("確定の同期に失敗しました");
+      }
     } catch (error) {
       alert("レートの保存に失敗しました");
+      setCourtResultMessage("確定に失敗しました");
+    } finally {
+      setConfirmingCourtIndex(null);
     }
   };
 
@@ -2571,33 +2645,40 @@ export default function App() {
         <div className="authCard">
           <h1>バドミントン組み合わせアプリ</h1>
 
-          <div className="authModeTabs">
-            <button
-              className={
-                authMode === "login"
-                  ? "authModeButton activeAuthMode"
-                  : "authModeButton"
-              }
-              onClick={() => {
-                setAuthMode("login");
-                setAuthError("");
-              }}
-            >
-              ログイン
-            </button>
-            <button
-              className={
-                authMode === "create"
-                  ? "authModeButton activeAuthMode"
-                  : "authModeButton"
-              }
-              onClick={() => {
-                setAuthMode("create");
-                setAuthError("");
-              }}
-            >
-              サークル作成
-            </button>
+          <div
+            className={
+              authMode === "login"
+                ? "authModeTabs singleAuthModeTab"
+                : "authModeTabs"
+            }
+          >
+            {authMode === "create" && (
+              <button
+                className="authModeButton"
+                onClick={() => {
+                  setAuthMode("login");
+                  setAuthError("");
+                }}
+              >
+                ログインへ戻る
+              </button>
+            )}
+
+            {authMode === "create" ? (
+              <div className="authModeButton activeAuthMode">
+                サークル作成
+              </div>
+            ) : (
+              <button
+                className="authModeButton"
+                onClick={() => {
+                  setAuthMode("create");
+                  setAuthError("");
+                }}
+              >
+                サークル作成
+              </button>
+            )}
           </div>
 
           {authMode === "login" ? (
@@ -2845,11 +2926,19 @@ export default function App() {
         {!isViewerMode && (
           <div className="row">
             <button
+              className={
+                confirmingCourtIndex === index ? "confirmingButton" : ""
+              }
+              disabled={confirmingCourtIndex === index}
               onClick={() =>
                 court?.winner ? confirmCourtResult(index) : generateCourt(index)
               }
             >
-              {court?.winner ? "確定" : "新規"}
+              {confirmingCourtIndex === index
+                ? "確定中..."
+                : court?.winner
+                ? "確定"
+                : "新規"}
             </button>
             <button className="subButton" onClick={() => clearCourt(index)}>
               消す
@@ -3193,6 +3282,32 @@ export default function App() {
         </section>
 
         <section className="card">
+          <h2>参加回数の差を何回まで許可しますか？</h2>
+          <p className="pointRuleDescription">
+            1回まで：かなり公平 / 2回まで：標準 / 3回まで：交流優先 / 気にしない：レート・ペア重複優先
+          </p>
+          <div className="playCountSpreadCreateGrid">
+            {playCountSpreadOptions.map((option) => (
+              <button
+                key={option.label}
+                onClick={() => setCreatePlayCountSpreadLimit(option.value)}
+                className={
+                  createPlayCountSpreadLimit === option.value
+                    ? "playCountSpreadCreateOption selectedOption"
+                    : "playCountSpreadCreateOption"
+                }
+              >
+                <strong>{option.label}</strong>
+                <span>{option.note}</span>
+              </button>
+            ))}
+          </div>
+          {groupError && !createPlayCountSpreadLimit && (
+            <p className="errorText">選択してください</p>
+          )}
+        </section>
+
+        <section className="card">
           <h2>何点制ですか</h2>
           <p className="pointRuleDescription">
             （これで途中参加の人の参加回数を調節します）
@@ -3319,8 +3434,8 @@ export default function App() {
 
         {!isViewerMode && (
           <div className="mainTitleButtons">
-            <button className="resetTodayButton" onClick={resetTodayState}>
-              本日の状態をリセット
+            <button className="resetTodayButton largeResetButton" onClick={resetTodayState}>
+              新しく練習を始める
             </button>
 
             <button className="deleteGroupButton" onClick={deleteActiveGroup}>
@@ -3372,6 +3487,9 @@ export default function App() {
         </div>
 
         {syncMessage && <p className="syncMessage">{syncMessage}</p>}
+        {courtResultMessage && (
+          <p className="courtResultMessage">{courtResultMessage}</p>
+        )}
         {autoSyncStatus && <p className="autoSyncStatus">{autoSyncStatus}</p>}
       </section>
 
@@ -3400,7 +3518,7 @@ export default function App() {
 
       {shouldShowRotateMessage && (
         <p className="rotateScreenHint">
-          画面を回転させると見やすいです
+          横画面にすると見やすいです
         </p>
       )}
 
@@ -3424,21 +3542,21 @@ export default function App() {
       </div>
 
       <section className="card">
-  <div className="sectionHeader">
+  <div className="sectionHeader restSectionTitleRow">
     <h2>休憩</h2>
 
     {!isViewerMode && (
-      <div className="restHeaderRight">
-        <button className="playCountEditButton" onClick={openPlayCountModal}>
-          参加回数変更
-        </button>
-
-        <div className="restSwapText">
-          タップして入れ替え
-        </div>
-      </div>
+      <button className="playCountEditButton" onClick={openPlayCountModal}>
+        参加回数変更
+      </button>
     )}
   </div>
+
+  {!isViewerMode && (
+    <div className="restSwapText">
+      タップして入れ替え
+    </div>
+  )}
         <div className="waitingList">
           {waitingMembers.map((member, index) => (
             <button
@@ -3498,6 +3616,30 @@ export default function App() {
         <div className="modalOverlay">
           <div className="modal">
             <h2>参加回数変更</h2>
+
+            <div className="playCountSpreadModalBlock">
+              <h3>参加回数の差を何回まで許可しますか？</h3>
+              <p className="playCountSpreadModalDescription">
+                1回まで：かなり公平 / 2回まで：標準 / 3回まで：交流優先 / 気にしない：レート・ペア重複優先
+              </p>
+
+              <div className="playCountSpreadModalGrid">
+                {playCountSpreadOptions.map((option) => (
+                  <button
+                    key={option.label}
+                    onClick={() => setTempPlayCountSpreadLimit(option.value)}
+                    className={
+                      tempPlayCountSpreadLimit === option.value
+                        ? "playCountSpreadModalOption selectedOption"
+                        : "playCountSpreadModalOption"
+                    }
+                  >
+                    <strong>{option.label}</strong>
+                    <span>{option.note}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
 
             <div className="playCountEditGrid">
               {activePlayCountMembers.map((member) => (

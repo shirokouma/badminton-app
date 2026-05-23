@@ -1285,44 +1285,117 @@ button:disabled {
   line-height: 1.5;
 }
 
+/* 参加回数差設定3：休憩見出し配置 */
+.restSectionTitleRow {
+  align-items: center;
+}
 
-.playCountEditModeButton {
-  background: #0f766e;
+.restSectionTitleRow h2 {
+  margin: 0;
+}
+
+.playCountEditButton {
+  background: #1e3a8a;
   color: white;
-  border-radius: 12px;
-  font-weight: bold;
+  font-size: 13px;
+  padding: 8px 12px;
+  white-space: nowrap;
 }
 
-.activePlayCountEditModeButton {
-  background: #115e59;
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.25);
-}
-
-.playCountEditButtons {
+/* 参加回数差設定3：グループ作成時の選択 */
+.playCountSpreadCreateGrid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 8px;
-  margin-top: 12px;
 }
 
-.playCountEditButtons button {
-  background: #e0f2fe;
-  color: #075985;
-}
-.restHeaderRight {
+.playCountSpreadCreateOption {
+  background: white;
+  color: #111827;
+  border: 1px solid #ddd;
+  text-align: left;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
+  gap: 4px;
 }
 
-.playCountEditButton {
-  background: #1e3a8a;
+.playCountSpreadCreateOption strong {
+  font-size: 14px;
+}
+
+.playCountSpreadCreateOption span {
+  font-size: 12px;
+  color: #6b7280;
+  font-weight: bold;
+}
+
+.playCountSpreadCreateOption.selectedOption {
+  background: #6b7280;
   color: white;
-  font-size: 13px;
-  padding: 8px 12px;
 }
 
+.playCountSpreadCreateOption.selectedOption span {
+  color: white;
+}
+
+/* 参加回数差設定3：参加回数変更モーダル内の設定 */
+.playCountSpreadModalBlock {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 12px;
+  margin-bottom: 14px;
+}
+
+.playCountSpreadModalBlock h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.playCountSpreadModalDescription {
+  margin: 0 0 10px;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: bold;
+  line-height: 1.5;
+}
+
+.playCountSpreadModalGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.playCountSpreadModalOption {
+  background: white;
+  color: #111827;
+  border: 1px solid #ddd;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.playCountSpreadModalOption strong {
+  font-size: 14px;
+}
+
+.playCountSpreadModalOption span {
+  font-size: 12px;
+  color: #6b7280;
+  font-weight: bold;
+}
+
+.playCountSpreadModalOption.selectedOption {
+  background: #6b7280;
+  color: white;
+}
+
+.playCountSpreadModalOption.selectedOption span {
+  color: white;
+}
+
+/* 参加回数変更モーダル */
 .playCountEditGrid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -1369,63 +1442,41 @@ button:disabled {
   padding: 8px;
   text-align: center;
 }
-.restHeaderRight {
+
+
+/* 統合修正1：新しく練習を始めるボタンを大きく表示 */
+.largeResetButton {
+  font-size: 24px;
+  padding: 18px 20px;
+  min-height: 72px;
+}
+
+/* 統合修正1：ログイン画面の選択中タブをボタンではなく表示として扱う */
+div.authModeButton {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
 }
 
-.playCountEditButton {
-  background: #1e3a8a;
+/* 確定反応改善1 */
+.confirmingButton {
+  background: #6b7280;
   color: white;
-  font-size: 13px;
-  padding: 8px 12px;
 }
 
-.playCountEditGrid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
-  margin-top: 12px;
-}
-
-.playCountEditCard {
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
-  border-radius: 14px;
-  padding: 10px;
-  text-align: center;
-}
-
-.playCountEditName {
-  display: block;
-  color: #111827;
-  margin-bottom: 6px;
-}
-
-.playCountEditCount {
-  color: #4b5563;
+.courtResultMessage {
+  margin: 4px 0 0;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 10px;
+  padding: 8px 10px;
   font-size: 13px;
   font-weight: bold;
-  margin-bottom: 8px;
 }
 
-.playCountEditActions {
-  display: grid;
-  grid-template-columns: 36px 1fr 36px;
-  gap: 6px;
-  align-items: center;
-}
-
-.playCountNumberButton {
-  padding: 8px 0;
-  border-radius: 10px;
-  font-size: 16px;
-}
-
-.playCountValueInput {
-  margin-top: 0;
-  padding: 8px;
-  text-align: center;
+/* 通常利用表示削除後のログイン画面 */
+.singleAuthModeTab {
+  grid-template-columns: 1fr;
 }

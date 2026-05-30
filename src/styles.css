@@ -155,10 +155,10 @@ button:disabled {
   background: #bbf7d0;
   border: 3px solid white;
   border-radius: 20px;
-  padding: 12px;
+  padding: 10px;
   position: relative;
-  min-height: 180px;
-  min-width: 220px;
+  min-height: 160px;
+  min-width: 200px;
 }
 
 .courtVisual::before {
@@ -195,8 +195,8 @@ button:disabled {
 }
 
 .courtBlank {
-  min-height: 180px;
-  min-width: 220px;
+  min-height: 160px;
+  min-width: 200px;
 }
 
 .game {
@@ -1446,9 +1446,9 @@ button:disabled {
 
 /* 統合修正1：新しく練習を始めるボタンを大きく表示 */
 .largeResetButton {
-  font-size: 24px;
-  padding: 18px 20px;
-  min-height: 72px;
+  font-size: 18px;
+  padding: 13px 15px;
+  min-height: 64px;
 }
 
 /* 統合修正1：ログイン画面の選択中タブをボタンではなく表示として扱う */
@@ -1459,7 +1459,31 @@ div.authModeButton {
   cursor: default;
 }
 
-/* 確定反応改善1 */
+/* 今回の統合改善：試合ガイド表示 */
+.courtActionRow {
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.courtActionRow button {
+  flex-shrink: 0;
+}
+
+.courtGuideText {
+  font-size: 12px;
+  font-weight: bold;
+  white-space: nowrap;
+  margin-left: 2px;
+}
+
+.courtGuideTextWin {
+  color: #b45309;
+}
+
+.courtGuideTextConfirm {
+  color: #111827;
+}
+
 .confirmingButton {
   background: #6b7280;
   color: white;
@@ -1467,16 +1491,96 @@ div.authModeButton {
 
 .courtResultMessage {
   margin: 4px 0 0;
-  color: #92400e;
-  background: #fef3c7;
-  border: 1px solid #fcd34d;
-  border-radius: 10px;
-  padding: 8px 10px;
+  color: #047857;
   font-size: 13px;
   font-weight: bold;
 }
 
-/* 通常利用表示削除後のログイン画面 */
+/* 今回の統合改善：ログイン画面の1列表示 */
 .singleAuthModeTab {
   grid-template-columns: 1fr;
+}
+
+/* 今回の統合改善：コートを一回り小さく */
+.courtVisual {
+  min-height: 160px;
+  min-width: 200px;
+  padding: 10px;
+}
+
+.courtBlank {
+  min-height: 160px;
+  min-width: 200px;
+}
+
+
+/* 別アカウントメンバー取込1 */
+.importMemberButton {
+  background: #0f766e;
+  color: white;
+  border-radius: 12px;
+  font-weight: bold;
+}
+
+.importMemberBox {
+  background: #f0fdfa;
+  border: 1px solid #99f6e4;
+  border-radius: 16px;
+  padding: 12px;
+  margin: 12px 0;
+}
+
+.importMemberBox h3 {
+  margin: 0 0 10px;
+}
+
+.importMemberGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.importMemberCard:disabled {
+  background: #f3f4f6;
+  color: #9ca3af;
+  opacity: 0.75;
+}
+
+.duplicateImportText {
+  color: #dc2626 !important;
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.importDecisionButton {
+  width: 100%;
+  margin-top: 12px;
+  background: #0f766e;
+  color: white;
+}
+
+/* 読み仮名表示設定1 */
+.memberReading {
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.member.selected .memberReading {
+  color: white;
+}
+
+
+/* 別アカウントメンバー取込2・練習終了表示 */
+.largeResetButton small {
+  font-size: 0.75em;
+}
+
+.importScreenCard {
+  margin-top: 12px;
+}
+
+.importScreenGrid {
+  margin-bottom: 12px;
 }

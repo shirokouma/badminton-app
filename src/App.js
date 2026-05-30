@@ -87,24 +87,39 @@ function makeBestGame(
             candidates[l],
           ];
 
+          // レート均等ペア1：4人を選んだあと、強さの偏りが少ないペア分けを優先する
+          // rateRankedGroup[0] が一番強く、rateRankedGroup[3] が一番弱い
+          const rateRankedGroup = [...group].sort(
+            (a, b) => getMemberRate(b) - getMemberRate(a)
+          );
+
           const patterns = [
-            [
-              [0, 1],
-              [2, 3],
-            ],
-            [
-              [0, 2],
-              [1, 3],
-            ],
+            // 1・4 vs 2・3：基本的に最もバランスが取りやすい
             [
               [0, 3],
               [1, 2],
             ],
+            // 1・3 vs 2・4：次にバランスが取りやすい
+            [
+              [0, 2],
+              [1, 3],
+            ],
+            // 1・2 vs 3・4：レート差が小さい場合のみ自然に採用される
+            [
+              [0, 1],
+              [2, 3],
+            ],
           ];
 
           for (const pattern of patterns) {
-            const teamA = [group[pattern[0][0]], group[pattern[0][1]]];
-            const teamB = [group[pattern[1][0]], group[pattern[1][1]]];
+            const teamA = [
+              rateRankedGroup[pattern[0][0]],
+              rateRankedGroup[pattern[0][1]],
+            ];
+            const teamB = [
+              rateRankedGroup[pattern[1][0]],
+              rateRankedGroup[pattern[1][1]],
+            ];
 
             const keyA = pairKey(teamA[0], teamA[1]);
             const keyB = pairKey(teamB[0], teamB[1]);
@@ -174,15 +189,17 @@ function makeBestGame(
             );
             const rateDiffPenalty = Math.abs(teamARate - teamBRate);
 
+            const rateBalancePenalty = rateDiffPenalty * 50;
+
             const score =
               zeroPlayPenalty * 10000000 +
               lowPlayPriorityPenalty * 1000000 +
               playCountSpreadPenalty * 500000 +
               courtGroupPenalty * 300000 +
               relationshipPenalty * 80000 +
+              rateBalancePenalty +
               pairDuplicatePenalty * 10000 +
               opponentPenalty * 5000 +
-              rateDiffPenalty +
               Math.random();
 
             if (!best || score < best.score) {
@@ -2282,7 +2299,7 @@ export default function App() {
       setEditDeleteError("メンバー削除に失敗しました");
     }
   };
-  const handleSwapTap = (member, location) => {
+  const handleSwapTap = async (member, location) => {
     if (!member) return;
 
     if (!selectedSwap) {
@@ -2328,11 +2345,19 @@ export default function App() {
     setMemberAtLocation(selectedSwap.location, member);
     setMemberAtLocation(location, selectedSwap.member);
 
-    updateActiveGroup({
-      waitingMembers: nextWaitingMembers,
-      courts: nextCourts,
-      selectedSwap: null,
+    const nextGroups = groups.map((group) => {
+      if (group.id !== activeGroupId) return group;
+
+      return {
+        ...group,
+        waitingMembers: nextWaitingMembers,
+        courts: nextCourts,
+        selectedSwap: null,
+      };
     });
+
+    setGroups(nextGroups);
+    await saveGroupsToFirestore(nextGroups, activeGroupId);
   };
 
   const isSwapSelected = (member) => {

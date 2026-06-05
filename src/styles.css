@@ -1584,3 +1584,70 @@ div.authModeButton {
 .importScreenGrid {
   margin-bottom: 12px;
 }
+
+
+/* 閲覧用URL2 */
+.viewerUrlMenuButton {
+  background: #16a34a;
+  color: white;
+  border: 1px solid #15803d;
+}
+
+.viewerUrlNote {
+  line-height: 1.7;
+  margin-bottom: 12px;
+}
+
+.viewerQrBox {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 18px;
+  padding: 16px;
+  margin: 12px 0;
+}
+
+.viewerQrBox img {
+  width: 240px;
+  height: 240px;
+  max-width: 100%;
+  border-radius: 12px;
+  background: white;
+}
+
+.viewerUrlText {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 10px;
+  color: #111827;
+  font-size: 12px;
+  font-weight: bold;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.viewerUrlCopyButton {
+  background: #16a34a;
+  color: white;
+}
+
+/* 練習日切替1 */
+.practiceDayModal h2 {
+  margin-top: 0;
+}
+
+.practiceDayInfo {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #374151;
+  font-size: 13px;
+  font-weight: bold;
+}

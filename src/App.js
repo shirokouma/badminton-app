@@ -87,24 +87,39 @@ function makeBestGame(
             candidates[l],
           ];
 
+          // レート均等ペア1：4人を選んだあと、強さの偏りが少ないペア分けを優先する
+          // rateRankedGroup[0] が一番強く、rateRankedGroup[3] が一番弱い
+          const rateRankedGroup = [...group].sort(
+            (a, b) => getMemberRate(b) - getMemberRate(a)
+          );
+
           const patterns = [
-            [
-              [0, 1],
-              [2, 3],
-            ],
-            [
-              [0, 2],
-              [1, 3],
-            ],
+            // 1・4 vs 2・3：基本的に最もバランスが取りやすい
             [
               [0, 3],
               [1, 2],
             ],
+            // 1・3 vs 2・4：次にバランスが取りやすい
+            [
+              [0, 2],
+              [1, 3],
+            ],
+            // 1・2 vs 3・4：レート差が小さい場合のみ自然に採用される
+            [
+              [0, 1],
+              [2, 3],
+            ],
           ];
 
           for (const pattern of patterns) {
-            const teamA = [group[pattern[0][0]], group[pattern[0][1]]];
-            const teamB = [group[pattern[1][0]], group[pattern[1][1]]];
+            const teamA = [
+              rateRankedGroup[pattern[0][0]],
+              rateRankedGroup[pattern[0][1]],
+            ];
+            const teamB = [
+              rateRankedGroup[pattern[1][0]],
+              rateRankedGroup[pattern[1][1]],
+            ];
 
             const keyA = pairKey(teamA[0], teamA[1]);
             const keyB = pairKey(teamB[0], teamB[1]);
@@ -174,15 +189,17 @@ function makeBestGame(
             );
             const rateDiffPenalty = Math.abs(teamARate - teamBRate);
 
+            const rateBalancePenalty = rateDiffPenalty * 50;
+
             const score =
               zeroPlayPenalty * 10000000 +
               lowPlayPriorityPenalty * 1000000 +
               playCountSpreadPenalty * 500000 +
               courtGroupPenalty * 300000 +
               relationshipPenalty * 80000 +
+              rateBalancePenalty +
               pairDuplicatePenalty * 10000 +
               opponentPenalty * 5000 +
-              rateDiffPenalty +
               Math.random();
 
             if (!best || score < best.score) {
@@ -341,49 +358,6 @@ function applyRateToMember(member, change) {
 
 function normalizeCircleId(value) {
   return value.trim().toLowerCase();
-}
-
-function getPracticeDateKey(date = new Date()) {
-  const practiceDate = new Date(date);
-
-  if (practiceDate.getHours() < 4) {
-    practiceDate.setDate(practiceDate.getDate() - 1);
-  }
-
-  const year = practiceDate.getFullYear();
-  const month = String(practiceDate.getMonth() + 1).padStart(2, "0");
-  const day = String(practiceDate.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
-}
-
-function getPublicViewerCircleIdFromUrl() {
-  const pathMatch = window.location.pathname.match(/\/view\/([^/?#]+)/);
-
-  if (pathMatch?.[1]) {
-    return normalizeCircleId(decodeURIComponent(pathMatch[1]));
-  }
-
-  const params = new URLSearchParams(window.location.search);
-  const queryCircleId = params.get("view") || params.get("viewer") || params.get("circleId");
-
-  if (queryCircleId) {
-    return normalizeCircleId(queryCircleId);
-  }
-
-  return "";
-}
-
-function getPublicViewerUrl(circleId) {
-  if (!circleId) return "";
-
-  return `${window.location.origin}/view/${encodeURIComponent(circleId)}`;
-}
-
-function getQrCodeUrl(text) {
-  if (!text) return "";
-
-  return `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(text)}`;
 }
 
 function getCircledNumber(number) {
@@ -572,6 +546,49 @@ function getInitialPlayCountForGroup(group) {
   return Math.floor(elapsed / interval);
 }
 
+function getPracticeDateKey(date = new Date()) {
+  const target = new Date(date);
+
+  // 練習日切替1：午前4時までは前日の練習扱いにする
+  if (target.getHours() < 4) {
+    target.setDate(target.getDate() - 1);
+  }
+
+  const year = target.getFullYear();
+  const month = String(target.getMonth() + 1).padStart(2, "0");
+  const day = String(target.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function getViewerCircleIdFromUrl() {
+  if (typeof window === "undefined") return "";
+
+  const params = new URLSearchParams(window.location.search);
+  const queryCircleId = params.get("viewerCircle") || params.get("viewCircle");
+
+  if (queryCircleId) return normalizeCircleId(queryCircleId);
+
+  const pathMatch = window.location.pathname.match(/\/view\/([^/]+)/);
+  if (pathMatch?.[1]) {
+    return normalizeCircleId(decodeURIComponent(pathMatch[1]));
+  }
+
+  return "";
+}
+
+function buildViewerUrl(circleId) {
+  if (typeof window === "undefined" || !circleId) return "";
+
+  return `${window.location.origin}/?viewerCircle=${encodeURIComponent(circleId)}`;
+}
+
+function buildQrCodeUrl(text) {
+  if (!text) return "";
+
+  return `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(text)}`;
+}
+
 export default function App() {
   const [authMode, setAuthMode] = useState("login");
   const [currentCircle, setCurrentCircle] = useState(null);
@@ -583,11 +600,6 @@ export default function App() {
   const [viewerSelectedMemberId, setViewerSelectedMemberId] = useState("");
   const [isViewerGuideOpen, setIsViewerGuideOpen] = useState(false);
   const [viewerMemberSearch, setViewerMemberSearch] = useState("");
-  const [isPublicViewerUrlMode, setIsPublicViewerUrlMode] = useState(false);
-  const [publicViewerLoading, setPublicViewerLoading] = useState(false);
-  const [isPracticeDaySwitchOpen, setIsPracticeDaySwitchOpen] = useState(false);
-  const [pendingPracticeGroups, setPendingPracticeGroups] = useState([]);
-  const [pendingPracticeActiveGroupId, setPendingPracticeActiveGroupId] = useState(null);
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [memberLoading, setMemberLoading] = useState(false);
@@ -629,6 +641,15 @@ export default function App() {
   const [participationError, setParticipationError] = useState("");
   const [memberSearch, setMemberSearch] = useState("");
   const [isNewMemberFormOpen, setIsNewMemberFormOpen] = useState(false);
+  const [isImportMemberModalOpen, setIsImportMemberModalOpen] = useState(false);
+  const [importCircleForm, setImportCircleForm] = useState({
+    circleId: "",
+    password: "",
+  });
+  const [importMembers, setImportMembers] = useState([]);
+  const [importSelectedIds, setImportSelectedIds] = useState([]);
+  const [importError, setImportError] = useState("");
+  const [importLoading, setImportLoading] = useState(false);
   const [memberForm, setMemberForm] = useState(emptyMemberForm);
   const [memberFormError, setMemberFormError] = useState(false);
   const [duplicateNicknameError, setDuplicateNicknameError] = useState("");
@@ -647,8 +668,8 @@ export default function App() {
   const [syncMessage, setSyncMessage] = useState("");
   const [lastSyncTime, setLastSyncTime] = useState("");
   const [autoSyncStatus, setAutoSyncStatus] = useState("");
-  const [confirmingCourtIndex, setConfirmingCourtIndex] = useState(null);
-  const [courtResultMessage, setCourtResultMessage] = useState("");
+  const [practiceDayPrompt, setPracticeDayPrompt] = useState(null);
+  const [viewerUrlCopyMessage, setViewerUrlCopyMessage] = useState("");
 
   const [isAdminSettingsOpen, setIsAdminSettingsOpen] = useState(false);
   const [adminPasswordInput, setAdminPasswordInput] = useState("");
@@ -676,6 +697,10 @@ export default function App() {
   const participationGroupRefs = useRef({});
   const viewerGroupRefs = useRef({});
   const adminGroupRefs = useRef({});
+  const syncClientIdRef = useRef(
+    `client-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
+  const latestSyncVersionRef = useRef(0);
   const [adminSettingsForm, setAdminSettingsForm] = useState({
     circleName: "",
     circleId: "",
@@ -683,6 +708,7 @@ export default function App() {
     masterPassword: "",
     viewerPassword: "",
     defaultRateDisplay: "あり",
+    defaultReadingDisplay: "なし",
   });
 
   const activeGroup = useMemo(() => {
@@ -690,111 +716,51 @@ export default function App() {
   }, [groups, activeGroupId]);
 
   const isViewerMode = userMode === "viewer";
-
-  const openPracticeDaySwitchIfNeeded = (loadedGroups, loadedActiveGroupId, savedPracticeDate) => {
-    if (!Array.isArray(loadedGroups) || loadedGroups.length === 0) return false;
-
-    const todayPracticeDate = getPracticeDateKey();
-
-    if (!savedPracticeDate || savedPracticeDate === todayPracticeDate) return false;
-
-    setPendingPracticeGroups(loadedGroups);
-    setPendingPracticeActiveGroupId(loadedActiveGroupId || loadedGroups[0]?.id || null);
-    setIsPracticeDaySwitchOpen(true);
-    return true;
-  };
-
-  const viewerSelectedMember = useMemo(() => {
-    if (!viewerSelectedMemberId) return null;
-    return members.find((member) => member.id === viewerSelectedMemberId) || null;
-  }, [members, viewerSelectedMemberId]);
+  const isReadingVisible = currentCircle?.defaultReadingDisplay === "あり";
+  const viewerUrl = currentCircle ? buildViewerUrl(currentCircle.circleId) : "";
 
   useEffect(() => {
-    const publicViewerCircleId = getPublicViewerCircleIdFromUrl();
+    if (!currentCircle?.circleId) return;
 
-    if (!publicViewerCircleId || currentCircle) return;
+    const circleRef = doc(db, "circles", currentCircle.circleId);
 
-    let cancelled = false;
+    const unsubscribe = onSnapshot(
+      circleRef,
+      (snapshot) => {
+        if (!snapshot.exists()) return;
 
-    const loginAsPublicViewer = async () => {
-      setPublicViewerLoading(true);
-      setAuthError("");
+        const circleData = snapshot.data();
 
-      try {
-        const circleRef = doc(db, "circles", publicViewerCircleId);
-        const circleSnap = await getDoc(circleRef);
+        setCurrentCircle((prevCircle) => {
+          if (!prevCircle) return prevCircle;
 
-        if (!circleSnap.exists()) {
-          if (!cancelled) {
-            setAuthError("閲覧用URLのサークルが見つかりません");
-          }
-          return;
-        }
-
-        const circleData = circleSnap.data();
-
-        if (cancelled) return;
-
-        setIsPublicViewerUrlMode(true);
-        setUserMode("viewer");
-        setViewerStep("confirm");
-
-        setCurrentCircle({
-          circleName: circleData.circleName,
-          circleId: circleData.circleId || publicViewerCircleId,
-          defaultRateDisplay: circleData.defaultRateDisplay || "あり",
-          rateChangeBase: circleData.rateChangeBase || DEFAULT_RATE_CHANGE_BASE,
-          rankInitialRates: circleData.rankInitialRates || DEFAULT_RANK_INITIAL_RATES,
-          rateProfiles: circleData.rateProfiles || DEFAULT_RATE_PROFILES,
+          return {
+            ...prevCircle,
+            circleName: circleData.circleName || prevCircle.circleName,
+            defaultRateDisplay: circleData.defaultRateDisplay || "あり",
+            defaultReadingDisplay: circleData.defaultReadingDisplay || "なし",
+            rateChangeBase: circleData.rateChangeBase || DEFAULT_RATE_CHANGE_BASE,
+            rankInitialRates: circleData.rankInitialRates || DEFAULT_RANK_INITIAL_RATES,
+            rateProfiles: circleData.rateProfiles || DEFAULT_RATE_PROFILES,
+          };
         });
 
         setRateChangeBase(circleData.rateChangeBase || DEFAULT_RATE_CHANGE_BASE);
         setRankInitialRates(circleData.rankInitialRates || DEFAULT_RANK_INITIAL_RATES);
         setRateProfiles(circleData.rateProfiles || DEFAULT_RATE_PROFILES);
-        setMembers([]);
-        setGroups([]);
-        setActiveGroupId(null);
-        setScreen("home");
-
-        await loadMembersFromFirestore(publicViewerCircleId);
-
-        const syncRef = doc(db, "circles", publicViewerCircleId, "sync", "current");
-        const syncSnap = await getDoc(syncRef);
-
-        if (cancelled) return;
-
-        if (syncSnap.exists()) {
-          const syncData = syncSnap.data();
-          const loadedGroups = Array.isArray(syncData.groups)
-            ? syncData.groups
-            : [];
-          const loadedActiveGroupId = syncData.activeGroupId || loadedGroups[0]?.id || null;
-
-          setGroups(loadedGroups);
-          setActiveGroupId(loadedActiveGroupId);
-
-          if (loadedGroups.length > 0) {
-            setScreen("main");
-          }
-        }
-      } catch (error) {
-        console.error("閲覧用URLログイン失敗", error);
-        if (!cancelled) {
-          setAuthError("閲覧用URLの読み込みに失敗しました");
-        }
-      } finally {
-        if (!cancelled) {
-          setPublicViewerLoading(false);
-        }
+      },
+      (error) => {
+        console.error("サークル設定自動同期失敗", error);
       }
-    };
+    );
 
-    loginAsPublicViewer();
+    return () => unsubscribe();
+  }, [currentCircle?.circleId]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [currentCircle]);
+  const viewerSelectedMember = useMemo(() => {
+    if (!viewerSelectedMemberId) return null;
+    return members.find((member) => member.id === viewerSelectedMemberId) || null;
+  }, [members, viewerSelectedMemberId]);
 
   useEffect(() => {
     if (groups.length > 0 && !activeGroupId) {
@@ -830,14 +796,23 @@ export default function App() {
         }
 
         const data = snapshot.data();
-        const loadedGroups = Array.isArray(data.groups) ? data.groups : [];
+        const incomingSyncVersion =
+          typeof data.updatedAtMillis === "number" ? data.updatedAtMillis : 0;
 
-        const loadedActiveGroupId = data.activeGroupId || loadedGroups[0]?.id || null;
-        const needsPracticeDaySwitch = openPracticeDaySwitchIfNeeded(
-          loadedGroups,
-          loadedActiveGroupId,
-          data.practiceDate
+        if (incomingSyncVersion < latestSyncVersionRef.current) {
+          setAutoSyncStatus("古い同期データを無視しました");
+          return;
+        }
+
+        latestSyncVersionRef.current = Math.max(
+          latestSyncVersionRef.current,
+          incomingSyncVersion
         );
+
+        const loadedGroups = Array.isArray(data.groups) ? data.groups : [];
+        const loadedActiveGroupId = data.activeGroupId || loadedGroups[0]?.id || null;
+        const loadedPracticeDate = data.practiceDate || getPracticeDateKey();
+        const todayPracticeDate = getPracticeDateKey();
 
         setGroups(loadedGroups);
         setActiveGroupId(loadedActiveGroupId);
@@ -848,8 +823,15 @@ export default function App() {
           setScreen("home");
         }
 
-        if (needsPracticeDaySwitch) {
-          setSyncMessage("前回の練習状態が残っています");
+        if (
+          userMode !== "viewer" &&
+          loadedGroups.length > 0 &&
+          loadedPracticeDate !== todayPracticeDate
+        ) {
+          setPracticeDayPrompt({
+            previousPracticeDate: loadedPracticeDate,
+            todayPracticeDate,
+          });
         }
 
         setLastSyncTime(formatSyncTime());
@@ -954,14 +936,49 @@ export default function App() {
 
     try {
       const syncRef = getSyncDocRef(currentCircle.circleId);
+      const latestSnap = await getDoc(syncRef);
+
+      if (latestSnap.exists()) {
+        const latestData = latestSnap.data();
+        const remoteSyncVersion =
+          typeof latestData.updatedAtMillis === "number"
+            ? latestData.updatedAtMillis
+            : 0;
+
+        if (remoteSyncVersion > latestSyncVersionRef.current) {
+          const remoteGroups = Array.isArray(latestData.groups)
+            ? latestData.groups
+            : [];
+          const remoteActiveGroupId =
+            latestData.activeGroupId || remoteGroups[0]?.id || null;
+
+          latestSyncVersionRef.current = remoteSyncVersion;
+          setGroups(remoteGroups);
+          setActiveGroupId(remoteActiveGroupId);
+          setScreen(remoteGroups.length > 0 ? "main" : "home");
+          setLastSyncTime(formatSyncTime());
+          setSyncMessage(
+            "他端末の新しい状態を検出したため、古い状態での上書きを止めました"
+          );
+          return false;
+        }
+      }
+
+      const nextSyncVersion = Math.max(
+        Date.now(),
+        latestSyncVersionRef.current + 1
+      );
 
       await setDoc(syncRef, {
         groups: nextGroups,
         activeGroupId: nextActiveGroupId,
         practiceDate: getPracticeDateKey(),
+        updatedAtMillis: nextSyncVersion,
+        updatedBy: syncClientIdRef.current,
         updatedAt: serverTimestamp(),
       });
 
+      latestSyncVersionRef.current = nextSyncVersion;
       setLastSyncTime(formatSyncTime());
       setSyncMessage("同期しました");
       return true;
@@ -985,14 +1002,23 @@ export default function App() {
       }
 
       const data = snap.data();
-      const loadedGroups = Array.isArray(data.groups) ? data.groups : [];
+      const incomingSyncVersion =
+        typeof data.updatedAtMillis === "number" ? data.updatedAtMillis : 0;
 
-      const loadedActiveGroupId = data.activeGroupId || loadedGroups[0]?.id || null;
-      const needsPracticeDaySwitch = openPracticeDaySwitchIfNeeded(
-        loadedGroups,
-        loadedActiveGroupId,
-        data.practiceDate
+      if (incomingSyncVersion < latestSyncVersionRef.current) {
+        setSyncMessage("古い同期データだったため読み込みませんでした");
+        return;
+      }
+
+      latestSyncVersionRef.current = Math.max(
+        latestSyncVersionRef.current,
+        incomingSyncVersion
       );
+
+      const loadedGroups = Array.isArray(data.groups) ? data.groups : [];
+      const loadedActiveGroupId = data.activeGroupId || loadedGroups[0]?.id || null;
+      const loadedPracticeDate = data.practiceDate || getPracticeDateKey();
+      const todayPracticeDate = getPracticeDateKey();
 
       setGroups(loadedGroups);
       setActiveGroupId(loadedActiveGroupId);
@@ -1003,8 +1029,15 @@ export default function App() {
         setScreen("home");
       }
 
-      if (needsPracticeDaySwitch) {
-        setSyncMessage("前回の練習状態が残っています");
+      if (
+        userMode !== "viewer" &&
+        loadedGroups.length > 0 &&
+        loadedPracticeDate !== todayPracticeDate
+      ) {
+        setPracticeDayPrompt({
+          previousPracticeDate: loadedPracticeDate,
+          todayPracticeDate,
+        });
       }
 
       setLastSyncTime(formatSyncTime());
@@ -1052,6 +1085,7 @@ export default function App() {
         masterPassword,
         viewerPassword,
         defaultRateDisplay: "あり",
+        defaultReadingDisplay: "なし",
         rateChangeBase: DEFAULT_RATE_CHANGE_BASE,
         rankInitialRates: DEFAULT_RANK_INITIAL_RATES,
         rateProfiles: DEFAULT_RATE_PROFILES,
@@ -1064,6 +1098,7 @@ export default function App() {
         circleName,
         circleId,
         defaultRateDisplay: "あり",
+        defaultReadingDisplay: "なし",
         rateChangeBase: DEFAULT_RATE_CHANGE_BASE,
         rankInitialRates: DEFAULT_RANK_INITIAL_RATES,
         rateProfiles: DEFAULT_RATE_PROFILES,
@@ -1132,6 +1167,7 @@ export default function App() {
         circleName: circleData.circleName,
         circleId: circleData.circleId,
         defaultRateDisplay: circleData.defaultRateDisplay || "あり",
+        defaultReadingDisplay: circleData.defaultReadingDisplay || "なし",
         rateChangeBase: circleData.rateChangeBase || DEFAULT_RATE_CHANGE_BASE,
         rankInitialRates: circleData.rankInitialRates || DEFAULT_RANK_INITIAL_RATES,
         rateProfiles: circleData.rateProfiles || DEFAULT_RATE_PROFILES,
@@ -1162,22 +1198,13 @@ export default function App() {
             ? syncData.groups
             : [];
 
-          const loadedActiveGroupId = syncData.activeGroupId || loadedGroups[0]?.id || null;
-          const needsPracticeDaySwitch = openPracticeDaySwitchIfNeeded(
-            loadedGroups,
-            loadedActiveGroupId,
-            syncData.practiceDate
-          );
-
           setGroups(loadedGroups);
-          setActiveGroupId(loadedActiveGroupId);
+          setActiveGroupId(
+            syncData.activeGroupId || loadedGroups[0]?.id || null
+          );
 
           if (loadedGroups.length > 0) {
             setScreen("main");
-          }
-
-          if (needsPracticeDaySwitch) {
-            setSyncMessage("前回の練習状態が残っています");
           }
         }
       } catch (syncError) {
@@ -1190,12 +1217,91 @@ export default function App() {
     }
   };
 
-  const logoutCircle = () => {
-    if (isPublicViewerUrlMode) {
-      window.history.replaceState(null, "", window.location.origin);
-    }
+  const loginViewerByCircleId = async (circleIdFromUrl) => {
+    const circleId = normalizeCircleId(circleIdFromUrl || "");
 
-    setIsPublicViewerUrlMode(false);
+    if (!circleId) return;
+
+    setAuthLoading(true);
+    setAuthError("");
+
+    try {
+      const circleRef = doc(db, "circles", circleId);
+      const circleSnap = await getDoc(circleRef);
+
+      if (!circleSnap.exists()) {
+        setAuthError("閲覧用URLのサークルIDが見つかりません");
+        return;
+      }
+
+      const circleData = circleSnap.data();
+
+      setUserMode("viewer");
+      setViewerStep("confirm");
+
+      setCurrentCircle({
+        circleName: circleData.circleName,
+        circleId: circleData.circleId || circleId,
+        defaultRateDisplay: circleData.defaultRateDisplay || "あり",
+        defaultReadingDisplay: circleData.defaultReadingDisplay || "なし",
+        rateChangeBase: circleData.rateChangeBase || DEFAULT_RATE_CHANGE_BASE,
+        rankInitialRates: circleData.rankInitialRates || DEFAULT_RANK_INITIAL_RATES,
+        rateProfiles: circleData.rateProfiles || DEFAULT_RATE_PROFILES,
+      });
+
+      setRateChangeBase(circleData.rateChangeBase || DEFAULT_RATE_CHANGE_BASE);
+      setRankInitialRates(circleData.rankInitialRates || DEFAULT_RANK_INITIAL_RATES);
+      setRateProfiles(circleData.rateProfiles || DEFAULT_RATE_PROFILES);
+
+      await loadMembersFromFirestore(circleId);
+
+      const syncRef = doc(db, "circles", circleId, "sync", "current");
+      const syncSnap = await getDoc(syncRef);
+
+      if (syncSnap.exists()) {
+        const syncData = syncSnap.data();
+        const loadedGroups = Array.isArray(syncData.groups)
+          ? syncData.groups
+          : [];
+
+        setGroups(loadedGroups);
+        setActiveGroupId(syncData.activeGroupId || loadedGroups[0]?.id || null);
+      } else {
+        setGroups([]);
+        setActiveGroupId(null);
+      }
+
+      setScreen("home");
+    } catch (error) {
+      console.error("閲覧用URLログイン失敗", error);
+      setAuthError("閲覧用URLでの読み込みに失敗しました");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (currentCircle) return;
+
+    const viewerCircleId = getViewerCircleIdFromUrl();
+
+    if (viewerCircleId) {
+      loginViewerByCircleId(viewerCircleId);
+    }
+  }, [currentCircle]);
+
+  const copyViewerUrl = async () => {
+    if (!viewerUrl) return;
+
+    try {
+      await navigator.clipboard.writeText(viewerUrl);
+      setViewerUrlCopyMessage("URLをコピーしました");
+    } catch (error) {
+      setViewerUrlCopyMessage("コピーできませんでした。URLを長押ししてコピーしてください");
+    }
+  };
+
+  const logoutCircle = () => {
     setCurrentCircle(null);
     setUserMode("normal");
     setViewerStep("none");
@@ -1211,6 +1317,8 @@ export default function App() {
     setScreen("home");
     setIsParticipationModalOpen(false);
     setTempSelectedIds([]);
+    setPracticeDayPrompt(null);
+    setViewerUrlCopyMessage("");
 
   };
 
@@ -1461,6 +1569,7 @@ export default function App() {
       masterPassword: "",
       viewerPassword: "",
       defaultRateDisplay: currentCircle?.defaultRateDisplay || "あり",
+      defaultReadingDisplay: currentCircle?.defaultReadingDisplay || "なし",
     });
   };
 
@@ -1507,6 +1616,7 @@ export default function App() {
         masterPassword: circleData.masterPassword || "",
         viewerPassword: circleData.viewerPassword || "",
         defaultRateDisplay: circleData.defaultRateDisplay || "あり",
+        defaultReadingDisplay: circleData.defaultReadingDisplay || "なし",
       });
 
       setRateChangeBase(circleData.rateChangeBase || DEFAULT_RATE_CHANGE_BASE);
@@ -1723,6 +1833,7 @@ export default function App() {
     const nextMasterPassword = adminSettingsForm.masterPassword.trim();
     const nextViewerPassword = adminSettingsForm.viewerPassword.trim();
     const nextDefaultRateDisplay = adminSettingsForm.defaultRateDisplay || "あり";
+    const nextDefaultReadingDisplay = adminSettingsForm.defaultReadingDisplay || "なし";
     const nextRateChangeBase = Number(rateChangeBase) || DEFAULT_RATE_CHANGE_BASE;
     const nextRankInitialRates = rankInitialRates || DEFAULT_RANK_INITIAL_RATES;
     const nextRateProfiles = rateProfiles || DEFAULT_RATE_PROFILES;
@@ -1752,6 +1863,7 @@ export default function App() {
         masterPassword: nextMasterPassword,
         viewerPassword: nextViewerPassword,
         defaultRateDisplay: nextDefaultRateDisplay,
+        defaultReadingDisplay: nextDefaultReadingDisplay,
         rateChangeBase: nextRateChangeBase,
         rankInitialRates: nextRankInitialRates,
         rateProfiles: nextRateProfiles,
@@ -1780,6 +1892,7 @@ export default function App() {
         circleName: nextCircleName,
         circleId: nextCircleId,
         defaultRateDisplay: nextDefaultRateDisplay,
+        defaultReadingDisplay: nextDefaultReadingDisplay,
         rateChangeBase: nextRateChangeBase,
         rankInitialRates: nextRankInitialRates,
         rateProfiles: nextRateProfiles,
@@ -1793,13 +1906,21 @@ export default function App() {
       if (nextGroupsForRateDisplay.length > 0) {
         const syncRef = doc(db, "circles", nextCircleId, "sync", "current");
 
+        const nextSyncVersion = Math.max(
+          Date.now(),
+          latestSyncVersionRef.current + 1
+        );
+
         await setDoc(syncRef, {
           groups: nextGroupsForRateDisplay,
           activeGroupId,
           practiceDate: getPracticeDateKey(),
+          updatedAtMillis: nextSyncVersion,
+          updatedBy: syncClientIdRef.current,
           updatedAt: serverTimestamp(),
         });
 
+        latestSyncVersionRef.current = nextSyncVersion;
         setGroups(nextGroupsForRateDisplay);
         setLastSyncTime(formatSyncTime());
       }
@@ -1817,14 +1938,18 @@ export default function App() {
     }
   };
 
-  const resetTodayState = async () => {
+  const resetTodayState = async (options = {}) => {
     if (!currentCircle) return;
 
-    const confirmReset = window.confirm(
-      "現在のグループ状況をリセットしますか？\n\n※参加状況・コート状況・参加回数のみリセットされます\n※メンバー登録やレートは残ったままです"
-    );
+    const skipConfirm = options?.skipConfirm === true;
 
-    if (!confirmReset) return;
+    if (!skipConfirm) {
+      const confirmReset = window.confirm(
+        "練習を終了し、新しい練習を開始しますか？\n\n・参加状況をリセット\n・コート状況をリセット\n・参加回数をリセット\n・試合履歴をリセット\n\n※登録メンバーとレートは保持されます"
+      );
+
+      if (!confirmReset) return;
+    }
 
     const nextGroups = [];
     const nextActiveGroupId = null;
@@ -1838,44 +1963,20 @@ export default function App() {
     setIsNewMemberFormOpen(false);
     setEditingMemberId(null);
     setIsEditSelectMode(false);
+    setPracticeDayPrompt(null);
 
     await saveGroupsToFirestore(nextGroups, nextActiveGroupId);
   };
 
   const continuePreviousPracticeDay = async () => {
-    const nextGroups = pendingPracticeGroups.length > 0 ? pendingPracticeGroups : groups;
-    const nextActiveGroupId = pendingPracticeActiveGroupId || activeGroupId || nextGroups[0]?.id || null;
-
-    setGroups(nextGroups);
-    setActiveGroupId(nextActiveGroupId);
-    setIsPracticeDaySwitchOpen(false);
-    setPendingPracticeGroups([]);
-    setPendingPracticeActiveGroupId(null);
-    setScreen(nextGroups.length > 0 ? "main" : "home");
-
-    await saveGroupsToFirestore(nextGroups, nextActiveGroupId);
+    setPracticeDayPrompt(null);
+    await saveGroupsToFirestore(groups, activeGroupId);
     setSyncMessage("前回の練習状態を引き継ぎました");
   };
 
-  const startNewPracticeDayFromSwitch = async () => {
-    const nextGroups = [];
-    const nextActiveGroupId = null;
-
-    setGroups(nextGroups);
-    setActiveGroupId(nextActiveGroupId);
-    setScreen("home");
-    setIsParticipationModalOpen(false);
-    setTempSelectedIds([]);
-    setMemberSearch("");
-    setIsNewMemberFormOpen(false);
-    setEditingMemberId(null);
-    setIsEditSelectMode(false);
-    setIsPracticeDaySwitchOpen(false);
-    setPendingPracticeGroups([]);
-    setPendingPracticeActiveGroupId(null);
-
-    await saveGroupsToFirestore(nextGroups, nextActiveGroupId);
-    setSyncMessage("新しい練習を開始しました");
+  const startNewPracticeDay = async () => {
+    await resetTodayState({ skipConfirm: true });
+    setSyncMessage("新しい練習日として開始しました");
   };
 
   const openCourtAddLayoutSelect = () => {
@@ -2004,6 +2105,12 @@ export default function App() {
     setMemberForm(emptyMemberForm);
     setMemberFormError(false);
     setDuplicateNicknameError("");
+    setIsImportMemberModalOpen(false);
+    setImportCircleForm({ circleId: "", password: "" });
+    setImportMembers([]);
+    setImportSelectedIds([]);
+    setImportError("");
+    setImportLoading(false);
     setEditingMemberId(null);
     setEditMemberForm(emptyMemberForm);
     setEditMemberFormError(false);
@@ -2022,6 +2129,12 @@ export default function App() {
     setMemberForm(emptyMemberForm);
     setMemberFormError(false);
     setDuplicateNicknameError("");
+    setIsImportMemberModalOpen(false);
+    setImportCircleForm({ circleId: "", password: "" });
+    setImportMembers([]);
+    setImportSelectedIds([]);
+    setImportError("");
+    setImportLoading(false);
     setEditingMemberId(null);
     setEditMemberForm(emptyMemberForm);
     setEditMemberFormError(false);
@@ -2082,6 +2195,182 @@ export default function App() {
     closeParticipationModal();
 
     await saveGroupsToFirestore(nextGroups, activeGroupId);
+  };
+
+  const openImportMemberModal = () => {
+    setIsParticipationModalOpen(false);
+    setIsImportMemberModalOpen(false);
+    setScreen("importMembers");
+    setImportCircleForm({ circleId: "", password: "" });
+    setImportMembers([]);
+    setImportSelectedIds([]);
+    setImportError("");
+    setImportLoading(false);
+    setIsNewMemberFormOpen(false);
+    setEditingMemberId(null);
+    setIsEditSelectMode(false);
+  };
+
+  const closeImportMemberScreen = () => {
+    setScreen("main");
+    setIsParticipationModalOpen(true);
+    setIsImportMemberModalOpen(false);
+    setImportCircleForm({ circleId: "", password: "" });
+    setImportMembers([]);
+    setImportSelectedIds([]);
+    setImportError("");
+    setImportLoading(false);
+  };
+
+  const loadImportMembers = async () => {
+    const sourceCircleId = normalizeCircleId(importCircleForm.circleId);
+    const sourcePassword = importCircleForm.password.trim();
+
+    if (!sourceCircleId || !sourcePassword) {
+      setImportError("コピー元のサークルIDとパスワードを入力してください");
+      return;
+    }
+
+    if (currentCircle?.circleId && sourceCircleId === currentCircle.circleId) {
+      setImportError("現在ログイン中のサークルとは別のサークルIDを入力してください");
+      return;
+    }
+
+    setImportLoading(true);
+    setImportError("");
+
+    try {
+      const sourceCircleRef = doc(db, "circles", sourceCircleId);
+      const sourceCircleSnap = await getDoc(sourceCircleRef);
+
+      if (!sourceCircleSnap.exists()) {
+        setImportError("コピー元のサークルIDが見つかりません");
+        setImportLoading(false);
+        return;
+      }
+
+      const sourceCircleData = sourceCircleSnap.data();
+      const canImport =
+        sourceCircleData.password === sourcePassword ||
+        sourceCircleData.masterPassword === sourcePassword;
+
+      if (!canImport) {
+        setImportError("コピー元のパスワードが違います");
+        setImportLoading(false);
+        return;
+      }
+
+      const sourceMembersRef = collection(db, "circles", sourceCircleId, "members");
+      const sourceMembersSnap = await getDocs(sourceMembersRef);
+      const loadedImportMembers = sourceMembersSnap.docs
+        .map((memberDoc) => ({
+          id: memberDoc.id,
+          ...memberDoc.data(),
+        }))
+        .sort((a, b) =>
+          (a.reading || a.nickname || a.name || "").localeCompare(
+            b.reading || b.nickname || b.name || "",
+            "ja"
+          )
+        );
+
+      setImportMembers(loadedImportMembers);
+      setImportSelectedIds([]);
+
+      if (loadedImportMembers.length === 0) {
+        setImportError("コピー元にメンバーが登録されていません");
+      }
+    } catch (error) {
+      console.error("別アカウントメンバー読み込み失敗", error);
+      setImportError("メンバーの読み込みに失敗しました");
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const toggleImportMember = (memberId) => {
+    setImportSelectedIds((prevIds) => {
+      if (prevIds.includes(memberId)) {
+        return prevIds.filter((id) => id !== memberId);
+      }
+
+      return [...prevIds, memberId];
+    });
+  };
+
+  const saveImportedMembers = async () => {
+    if (!currentCircle) return;
+
+    if (importSelectedIds.length === 0) {
+      setImportError("取り込むメンバーを選択してください");
+      return;
+    }
+
+    const selectedImportMembers = importMembers.filter((member) =>
+      importSelectedIds.includes(member.id)
+    );
+
+    const duplicateNames = selectedImportMembers.filter((member) =>
+      nicknameExists(member.nickname || member.name || "")
+    );
+
+    if (duplicateNames.length > 0) {
+      setImportError(
+        `同じニックネームがあります：${duplicateNames
+          .map((member) => member.nickname || member.name)
+          .join("、")}`
+      );
+      return;
+    }
+
+    setImportLoading(true);
+    setImportError("");
+
+    try {
+      const now = Date.now();
+      const copiedMembers = selectedImportMembers.map((member, index) => {
+        const nickname = member.nickname || member.name || "";
+        const rank = member.rank || "初心者";
+
+        return {
+          id: `${now}-${index}`,
+          nickname,
+          name: nickname,
+          reading: member.reading || "",
+          gender: member.gender || "なし",
+          rank,
+          rate:
+            typeof rankInitialRates?.[rank] === "number"
+              ? rankInitialRates[rank]
+              : getInitialRate(rank),
+        };
+      });
+
+      await Promise.all(
+        copiedMembers.map((member) =>
+          saveMemberToFirestore(currentCircle.circleId, member)
+        )
+      );
+
+      setTempSelectedIds((prevIds) => [
+        ...prevIds,
+        ...copiedMembers.map((member) => member.id),
+      ]);
+
+      setImportError("");
+      setIsImportMemberModalOpen(false);
+      setImportCircleForm({ circleId: "", password: "" });
+      setImportMembers([]);
+      setImportSelectedIds([]);
+      setScreen("main");
+      setIsParticipationModalOpen(true);
+      setSyncMessage("別アカウントからメンバーを取り込みました");
+    } catch (error) {
+      console.error("別アカウントメンバー登録失敗", error);
+      setImportError("メンバーの登録に失敗しました");
+    } finally {
+      setImportLoading(false);
+    }
   };
 
   const nicknameExists = (nickname, ignoreId = null) => {
@@ -2420,7 +2709,7 @@ export default function App() {
     await saveGroupsToFirestore(nextGroups, activeGroupId);
   };
 
-  const setWinner = async (index, winner) => {
+  const setWinner = (index, winner) => {
     const targetCourt = courts[index];
     if (!targetCourt) return;
 
@@ -2430,39 +2719,16 @@ export default function App() {
       winner,
     };
 
-    const nextGroups = groups.map((group) => {
-      if (group.id !== activeGroupId) return group;
-
-      return {
-        ...group,
-        courts: newCourts,
-        selectedSwap: null,
-      };
+    updateActiveGroup({
+      courts: newCourts,
     });
-
-    setGroups(nextGroups);
-    setCourtResultMessage("");
-
-    await saveGroupsToFirestore(nextGroups, activeGroupId);
   };
 
   const confirmCourtResult = async (index) => {
     if (!currentCircle) return;
-    if (confirmingCourtIndex !== null) return;
 
-    const latestActiveGroup =
-      groups.find((group) => group.id === activeGroupId) || activeGroup;
-    const targetCourt = latestActiveGroup?.courts?.[index] || courts[index];
-
-    if (!targetCourt) return;
-
-    if (!targetCourt.winner) {
-      setCourtResultMessage("勝ちを選んでから確定してください");
-      return;
-    }
-
-    setConfirmingCourtIndex(index);
-    setCourtResultMessage("確定中です...");
+    const targetCourt = courts[index];
+    if (!targetCourt || !targetCourt.winner) return;
 
     const winnerTeam =
       targetCourt.winner === "A" ? targetCourt.teamA : targetCourt.teamB;
@@ -2546,18 +2812,9 @@ export default function App() {
 
       setGroups(nextGroups);
 
-      const saved = await saveGroupsToFirestore(nextGroups, activeGroupId);
-
-      if (saved) {
-        setCourtResultMessage("試合結果を確定しました");
-      } else {
-        setCourtResultMessage("確定の同期に失敗しました");
-      }
+      await saveGroupsToFirestore(nextGroups, activeGroupId);
     } catch (error) {
       alert("レートの保存に失敗しました");
-      setCourtResultMessage("確定に失敗しました");
-    } finally {
-      setConfirmingCourtIndex(null);
     }
   };
 
@@ -2777,6 +3034,9 @@ export default function App() {
                 }}
               >
                 <strong>{member.nickname || member.name}</strong>
+                {isReadingVisible && member.reading && (
+                  <span className="memberReading">読み：{member.reading}</span>
+                )}
                 <span>レート：{getMemberRate(member)}</span>
               </button>
             ),
@@ -2866,6 +3126,205 @@ export default function App() {
           })}
         </div>
       </>
+    );
+  };
+
+  const renderImportMemberScreen = () => {
+    return (
+      <div className="app">
+        <div className="circleHeader">
+          <div>
+            <div className="circleLabel">ログイン中</div>
+            <strong>{currentCircle.circleName}</strong>
+            {isViewerMode && (
+              <span className="viewerModeBadge">観賞用</span>
+            )}
+          </div>
+
+          <div className="headerRightButtons">
+            <button className="logoutButton" onClick={logoutCircle}>
+              ログアウト
+            </button>
+          </div>
+        </div>
+
+        <section className="card importScreenCard">
+          <h1>別アカウントから持ってくる</h1>
+          <p className="adminSmallNote">
+            コピー元のサークルからメンバーを選んで登録します。レートはコピー元の現在値ではなく、ランク基準の初期レートで登録します。
+          </p>
+
+          <label>
+            コピー元サークルID
+            <input
+              value={importCircleForm.circleId}
+              onChange={(e) =>
+                setImportCircleForm({
+                  ...importCircleForm,
+                  circleId: e.target.value,
+                })
+              }
+              placeholder="コピー元のサークルID"
+            />
+          </label>
+
+          <label>
+            コピー元パスワード
+            <input
+              type="password"
+              value={importCircleForm.password}
+              onChange={(e) =>
+                setImportCircleForm({
+                  ...importCircleForm,
+                  password: e.target.value,
+                })
+              }
+              placeholder="通常または管理者パスワード"
+            />
+          </label>
+
+          <div className="bottomActions">
+            <button onClick={loadImportMembers} disabled={importLoading}>
+              {importLoading ? "読み込み中..." : "メンバー読み込み"}
+            </button>
+            <button className="subButton" onClick={closeImportMemberScreen}>
+              参加メンバー選択へ戻る
+            </button>
+          </div>
+
+          {importError && (
+            <p className="errorText centerText">{importError}</p>
+          )}
+
+          {importMembers.length > 0 && (
+            <>
+              <p className="participantCount">
+                取込選択中：{importSelectedIds.length}人
+              </p>
+
+              <div className="importMemberGrid importScreenGrid">
+                {importMembers.map((member) => {
+                  const isImportSelected = importSelectedIds.includes(member.id);
+                  const isDuplicate = nicknameExists(member.nickname || member.name || "");
+                  const rank = member.rank || "初心者";
+                  const baseRate =
+                    typeof rankInitialRates?.[rank] === "number"
+                      ? rankInitialRates[rank]
+                      : getInitialRate(rank);
+
+                  return (
+                    <button
+                      key={member.id}
+                      className={
+                        isImportSelected
+                          ? "member selected importMemberCard"
+                          : "member importMemberCard"
+                      }
+                      disabled={isDuplicate}
+                      onClick={() => toggleImportMember(member.id)}
+                    >
+                      <strong>{member.nickname || member.name}</strong>
+                      {isReadingVisible && member.reading && (
+                        <span className="memberReading">読み：{member.reading}</span>
+                      )}
+                      <span>ランク：{rank}</span>
+                      <span>登録時レート：{baseRate}</span>
+                      {isDuplicate && (
+                        <span className="duplicateImportText">
+                          同じニックネームがあります
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <button
+                className="importDecisionButton"
+                onClick={saveImportedMembers}
+                disabled={importLoading}
+              >
+                選択したメンバーを登録
+              </button>
+            </>
+          )}
+        </section>
+      </div>
+    );
+  };
+
+  const renderViewerUrlAdminPanel = () => {
+    const qrCodeUrl = buildQrCodeUrl(viewerUrl);
+
+    return (
+      <>
+        <h3>閲覧用URL</h3>
+
+        <p className="adminSmallNote viewerUrlNote">
+          このQRコードを読み込むと、ログイン不要で観賞用画面を開けます。
+          ただし、最初はこれまで通り「活動したことがありますか？」の確認画面から始まります。
+        </p>
+
+        {qrCodeUrl && (
+          <div className="viewerQrBox">
+            <img src={qrCodeUrl} alt="閲覧用URLのQRコード" />
+          </div>
+        )}
+
+        <div className="viewerUrlText">
+          {viewerUrl}
+        </div>
+
+        {viewerUrlCopyMessage && (
+          <p className="syncMessage centerText">{viewerUrlCopyMessage}</p>
+        )}
+
+        <div className="bottomActions">
+          <button className="viewerUrlCopyButton" onClick={copyViewerUrl}>
+            URLコピー
+          </button>
+          <button
+            className="subButton"
+            onClick={() => {
+              setViewerUrlCopyMessage("");
+              setAdminPanel("menu");
+            }}
+          >
+            戻る
+          </button>
+        </div>
+      </>
+    );
+  };
+
+  const renderPracticeDayPrompt = () => {
+    if (!practiceDayPrompt || isViewerMode) return null;
+
+    return (
+      <div className="modalOverlay">
+        <div className="modal practiceDayModal">
+          <h2>前回の練習状態が残っています</h2>
+
+          <p className="viewerConfirmText">
+            午前4時を過ぎたため、新しい練習日として扱えます。
+            前回のコート・参加状況を引き継ぐか、新しく練習を始めるか選んでください。
+          </p>
+
+          <div className="practiceDayInfo">
+            <span>前回：{practiceDayPrompt.previousPracticeDate}</span>
+            <span>今回：{practiceDayPrompt.todayPracticeDate}</span>
+          </div>
+
+          <div className="bottomActions">
+            <button onClick={continuePreviousPracticeDay}>
+              引き継ぐ
+            </button>
+            <button className="resetTodayButton" onClick={startNewPracticeDay}>
+              新しく練習を始める
+            </button>
+          </div>
+        </div>
+      </div>
     );
   };
 
@@ -3156,19 +3615,11 @@ export default function App() {
         {!isViewerMode && (
           <div className="row">
             <button
-              className={
-                confirmingCourtIndex === index ? "confirmingButton" : ""
-              }
-              disabled={confirmingCourtIndex === index}
               onClick={() =>
                 court?.winner ? confirmCourtResult(index) : generateCourt(index)
               }
             >
-              {confirmingCourtIndex === index
-                ? "確定中..."
-                : court?.winner
-                ? "確定"
-                : "新規"}
+              {court?.winner ? "確定" : "新規"}
             </button>
             <button className="subButton" onClick={() => clearCourt(index)}>
               消す
@@ -3316,17 +3767,6 @@ export default function App() {
     );
   };
 
-  if (!currentCircle && publicViewerLoading) {
-    return (
-      <div className="app homeScreen">
-        <section className="card viewerUrlLoadingCard">
-          <h1>閲覧用画面を読み込み中...</h1>
-          <p className="viewerNoticeSmall">しばらくお待ちください。</p>
-        </section>
-      </div>
-    );
-  }
-
   if (!currentCircle) {
     return renderAuthScreen();
   }
@@ -3341,6 +3781,10 @@ export default function App() {
 
   if (isViewerMode && viewerStep === "selectMember") {
     return renderViewerMemberSelectScreen();
+  }
+
+  if (screen === "importMembers") {
+    return renderImportMemberScreen();
   }
 
 
@@ -3676,7 +4120,9 @@ export default function App() {
         {!isViewerMode && (
           <div className="mainTitleButtons">
             <button className="resetTodayButton largeResetButton" onClick={resetTodayState}>
-              新しく練習を始める
+              今日の練習を終える
+              <br />
+              <small>（新しく練習を始める）</small>
             </button>
 
             <button className="deleteGroupButton" onClick={deleteActiveGroup}>
@@ -3728,9 +4174,6 @@ export default function App() {
         </div>
 
         {syncMessage && <p className="syncMessage">{syncMessage}</p>}
-        {courtResultMessage && (
-          <p className="courtResultMessage">{courtResultMessage}</p>
-        )}
         {autoSyncStatus && <p className="autoSyncStatus">{autoSyncStatus}</p>}
       </section>
 
@@ -3831,6 +4274,8 @@ export default function App() {
         </div>
       </section>
 
+
+      {renderPracticeDayPrompt()}
 
       {isViewerGuideOpen && (
         <div className="modalOverlay">
@@ -3978,7 +4423,10 @@ export default function App() {
                     <div className="adminMenuGrid">
                       <button
                         className="viewerUrlMenuButton"
-                        onClick={() => setAdminPanel("viewerUrl")}
+                        onClick={() => {
+                          setViewerUrlCopyMessage("");
+                          setAdminPanel("viewerUrl");
+                        }}
                       >
                         閲覧用URL
                       </button>
@@ -3993,6 +4441,10 @@ export default function App() {
 
                       <button onClick={() => setAdminPanel("rateDisplay")}>
                         レート表示ON/OFF
+                      </button>
+
+                      <button onClick={() => setAdminPanel("readingDisplay")}>
+                        読み仮名表示ON/OFF
                       </button>
 
                       <button onClick={() => setAdminPanel("member")}>
@@ -4026,6 +4478,8 @@ export default function App() {
                     </div>
                   </>
                 )}
+
+                {adminPanel === "viewerUrl" && renderViewerUrlAdminPanel()}
 
                 {adminPanel === "circleName" && (
                   <>
@@ -4174,44 +4628,45 @@ export default function App() {
                   </>
                 )}
 
-                
-                {adminPanel === "viewerUrl" && (
+
+                {adminPanel === "readingDisplay" && (
                   <>
-                    <h3>閲覧用URL</h3>
+                    <h3>読み仮名表示ON/OFF</h3>
+
+                    <div className="formBlock">
+                      <div className="formTitle">読み仮名を表示しますか</div>
+                      <div className="optionGrid">
+                        {rateDisplayOptions.map((option) => (
+                          <button
+                            key={option}
+                            onClick={() =>
+                              setAdminSettingsForm({
+                                ...adminSettingsForm,
+                                defaultReadingDisplay: option,
+                              })
+                            }
+                            className={
+                              adminSettingsForm.defaultReadingDisplay === option
+                                ? "option selectedOption"
+                                : "option"
+                            }
+                          >
+                            {option}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
 
                     <p className="adminSmallNote">
-                      このQRコードまたはURLを開くと、ログインなしで観賞用モードに入れます。最初は今まで通り「初参加かどうか」の確認画面が表示されます。
+                      メンバー一覧や参加者選択画面に読み仮名を表示するかを切り替えます。入力欄はOFFでも残ります。
                     </p>
 
-                    <div className="viewerQrBox">
-                      <img
-                        className="viewerQrImage"
-                        src={getQrCodeUrl(getPublicViewerUrl(currentCircle?.circleId))}
-                        alt="閲覧用URLのQRコード"
-                      />
-                    </div>
-
-                    <div className="viewerUrlBox">
-                      {getPublicViewerUrl(currentCircle?.circleId)}
-                    </div>
+                    {adminError && (
+                      <p className="errorText centerText">{adminError}</p>
+                    )}
 
                     <div className="bottomActions">
-                      <button
-                        className="viewerUrlCopyButton"
-                        onClick={() => {
-                          const url = getPublicViewerUrl(currentCircle?.circleId);
-
-                          if (navigator.clipboard?.writeText) {
-                            navigator.clipboard.writeText(url);
-                            setSyncMessage("閲覧用URLをコピーしました");
-                          } else {
-                            window.prompt("閲覧用URLをコピーしてください", url);
-                          }
-                        }}
-                      >
-                        URLをコピー
-                      </button>
-
+                      <button onClick={saveAdminSettings}>保存</button>
                       <button
                         className="subButton"
                         onClick={() => setAdminPanel("menu")}
@@ -4222,6 +4677,7 @@ export default function App() {
                   </>
                 )}
 
+                
                 {adminPanel === "rateBase" && (
                   <>
                     <h3>レート変動値変更</h3>
@@ -4368,6 +4824,9 @@ export default function App() {
                           onClick={() => openAdminMemberEdit(member)}
                         >
                           <strong>{member.nickname || member.name}</strong>
+                          {isReadingVisible && member.reading && (
+                            <span className="memberReading">読み：{member.reading}</span>
+                          )}
                           <span>ランク：{member.rank || "未設定"}</span>
                           <span>レート：{getMemberRate(member)}</span>
                         </button>
@@ -4386,30 +4845,6 @@ export default function App() {
                 )}
               </>
             )}
-          </div>
-        </div>
-      )}
-
-      {isPracticeDaySwitchOpen && !isViewerMode && (
-        <div className="modalOverlay">
-          <div className="modal practiceDayModal">
-            <h2>前回の練習状態が残っています</h2>
-
-            <p className="practiceDayText">
-              朝4時を過ぎたため、新しい練習日として扱えます。前回のコート・参加状況を引き継ぐか、新しく練習を始めるか選んでください。
-            </p>
-
-            <div className="bottomActions">
-              <button onClick={continuePreviousPracticeDay}>
-                引き継ぐ
-              </button>
-              <button
-                className="resetTodayButton"
-                onClick={startNewPracticeDayFromSwitch}
-              >
-                新しく練習を始める
-              </button>
-            </div>
           </div>
         </div>
       )}
@@ -4602,9 +5037,17 @@ export default function App() {
                   setIsEditSelectMode(!isEditSelectMode);
                   setIsNewMemberFormOpen(false);
                   setEditingMemberId(null);
+                  setIsImportMemberModalOpen(false);
                 }}
               >
                 編集
+              </button>
+
+              <button
+                className="importMemberButton"
+                onClick={openImportMemberModal}
+              >
+                別アカウントから持ってくる
               </button>
             </div>
 
@@ -4665,6 +5108,9 @@ export default function App() {
                     }
                   >
                     <strong>{member.nickname || member.name}</strong>
+                    {isReadingVisible && member.reading && (
+                      <span className="memberReading">読み：{member.reading}</span>
+                    )}
                     {isRateVisible && (
                       <div className="memberRateRow">
                         <span className="memberRate">R{getMemberRate(member)}</span>

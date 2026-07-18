@@ -4,8 +4,10 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   onSnapshot,
+  runTransaction,
   serverTimestamp,
   setDoc,
 } from "firebase/firestore";
@@ -668,6 +670,7 @@ export default function App() {
   const [syncMessage, setSyncMessage] = useState("");
   const [lastSyncTime, setLastSyncTime] = useState("");
   const [autoSyncStatus, setAutoSyncStatus] = useState("");
+  const [isSyncSaving, setIsSyncSaving] = useState(false);
   const [practiceDayPrompt, setPracticeDayPrompt] = useState(null);
   const [viewerUrlCopyMessage, setViewerUrlCopyMessage] = useState("");
 
@@ -700,7 +703,12 @@ export default function App() {
   const syncClientIdRef = useRef(
     `client-${Date.now()}-${Math.random().toString(36).slice(2)}`
   );
+  // latestSyncVersionRef は時刻ではなく、Firestore上の原子的な連番 revision を保持します。
   const latestSyncVersionRef = useRef(0);
+  const syncInitializedRef = useRef(false);
+  const pendingSaveCountRef = useRef(0);
+  const saveQueueRef = useRef(Promise.resolve());
+  const pendingRemoteSyncRef = useRef(null);
   const [adminSettingsForm, setAdminSettingsForm] = useState({
     circleName: "",
     circleId: "",
@@ -775,6 +783,15 @@ export default function App() {
 
 
   useEffect(() => {
+    latestSyncVersionRef.current = 0;
+    syncInitializedRef.current = false;
+    pendingSaveCountRef.current = 0;
+    pendingRemoteSyncRef.current = null;
+    saveQueueRef.current = Promise.resolve();
+    setIsSyncSaving(false);
+  }, [currentCircle?.circleId]);
+
+  useEffect(() => {
     if (!currentCircle?.circleId) return;
 
     const syncRef = doc(
@@ -785,69 +802,69 @@ export default function App() {
       "current"
     );
 
-    setAutoSyncStatus("自動同期監視中");
+    setAutoSyncStatus("サーバー同期を確認中");
 
     const unsubscribe = onSnapshot(
       syncRef,
+      { includeMetadataChanges: true },
       (snapshot) => {
         if (!snapshot.exists()) {
-          setAutoSyncStatus("同期データ待機中");
+          if (!snapshot.metadata.fromCache) {
+            syncInitializedRef.current = true;
+            latestSyncVersionRef.current = 0;
+            setAutoSyncStatus("同期データ待機中");
+          }
           return;
         }
 
         const data = snapshot.data();
-        const incomingSyncVersion =
-          typeof data.updatedAtMillis === "number" ? data.updatedAtMillis : 0;
+        const incomingRevision = getSyncRevision(data);
 
-        if (incomingSyncVersion < latestSyncVersionRef.current) {
-          setAutoSyncStatus("古い同期データを無視しました");
+        // Firestoreは最初に端末内キャッシュを返すことがあります。
+        // ここを画面へ反映すると、数分前の状態へ一時的または恒久的に戻る原因になります。
+        if (snapshot.metadata.fromCache) {
+          setAutoSyncStatus("サーバーの最新状態を確認中");
           return;
         }
 
-        latestSyncVersionRef.current = Math.max(
-          latestSyncVersionRef.current,
-          incomingSyncVersion
-        );
-
-        const loadedGroups = Array.isArray(data.groups) ? data.groups : [];
-        const loadedActiveGroupId = data.activeGroupId || loadedGroups[0]?.id || null;
-        const loadedPracticeDate = data.practiceDate || getPracticeDateKey();
-        const todayPracticeDate = getPracticeDateKey();
-
-        setGroups(loadedGroups);
-        setActiveGroupId(loadedActiveGroupId);
-
-        if (loadedGroups.length > 0) {
-          setScreen("main");
-        } else {
-          setScreen("home");
+        // 自分自身の未確定ローカル書き込みは、すでに画面へ反映済みなので無視します。
+        if (
+          snapshot.metadata.hasPendingWrites &&
+          data.updatedBy === syncClientIdRef.current
+        ) {
+          return;
         }
 
         if (
-          userMode !== "viewer" &&
-          loadedGroups.length > 0 &&
-          loadedPracticeDate !== todayPracticeDate
+          syncInitializedRef.current &&
+          incomingRevision <= latestSyncVersionRef.current
         ) {
-          setPracticeDayPrompt({
-            previousPracticeDate: loadedPracticeDate,
-            todayPracticeDate,
-          });
+          setAutoSyncStatus("自動同期中");
+          return;
         }
 
-        setLastSyncTime(formatSyncTime());
-        setSyncMessage("自動同期で更新しました");
+        // 保存処理中に別端末の更新が来た場合、保存トランザクションの結果が出るまで保留します。
+        if (pendingSaveCountRef.current > 0) {
+          pendingRemoteSyncRef.current = data;
+          setAutoSyncStatus("他端末の更新を確認中");
+          return;
+        }
+
+        applyRemoteSyncData(data, {
+          message: "他端末の最新状態を自動反映しました",
+          allowPracticePrompt: userMode !== "viewer",
+        });
         setAutoSyncStatus("自動同期中");
       },
       (error) => {
         console.error("自動同期失敗", error);
         setAutoSyncStatus("自動同期エラー");
-        setSyncMessage("自動同期に失敗しました");
+        setSyncMessage("自動同期に失敗しました。通信状態を確認してください");
       }
     );
 
     return () => unsubscribe();
-  }, [currentCircle?.circleId]);
-
+  }, [currentCircle?.circleId, userMode]);
 
   useEffect(() => {
     if (!currentCircle?.circleId) return;
@@ -925,126 +942,229 @@ export default function App() {
     return now.toLocaleTimeString("ja-JP", {
       hour: "2-digit",
       minute: "2-digit",
+      second: "2-digit",
     });
   };
 
-  const saveGroupsToFirestore = async (
-    nextGroups = groups,
-    nextActiveGroupId = activeGroupId
+  const getSyncRevision = (data) => {
+    if (typeof data?.revision === "number" && Number.isFinite(data.revision)) {
+      return data.revision;
+    }
+
+    // 旧版データから安全に移行するため、旧 updatedAtMillis を初回revisionとして利用します。
+    if (
+      typeof data?.updatedAtMillis === "number" &&
+      Number.isFinite(data.updatedAtMillis)
+    ) {
+      return data.updatedAtMillis;
+    }
+
+    return 0;
+  };
+
+  const applyRemoteSyncData = (
+    data,
+    { message = "最新状態を反映しました", allowPracticePrompt = true } = {}
   ) => {
-    if (!currentCircle) return false;
+    const incomingRevision = getSyncRevision(data);
+    const loadedGroups = Array.isArray(data?.groups) ? data.groups : [];
+    const loadedActiveGroupId =
+      data?.activeGroupId || loadedGroups[0]?.id || null;
+    const loadedPracticeDate = data?.practiceDate || getPracticeDateKey();
+    const todayPracticeDate = getPracticeDateKey();
 
-    try {
-      const syncRef = getSyncDocRef(currentCircle.circleId);
-      const latestSnap = await getDoc(syncRef);
+    latestSyncVersionRef.current = incomingRevision;
+    syncInitializedRef.current = true;
 
-      if (latestSnap.exists()) {
-        const latestData = latestSnap.data();
-        const remoteSyncVersion =
-          typeof latestData.updatedAtMillis === "number"
-            ? latestData.updatedAtMillis
-            : 0;
+    setGroups(loadedGroups);
+    setActiveGroupId(loadedActiveGroupId);
+    setScreen(loadedGroups.length > 0 ? "main" : "home");
 
-        if (remoteSyncVersion > latestSyncVersionRef.current) {
-          const remoteGroups = Array.isArray(latestData.groups)
-            ? latestData.groups
-            : [];
-          const remoteActiveGroupId =
-            latestData.activeGroupId || remoteGroups[0]?.id || null;
-
-          latestSyncVersionRef.current = remoteSyncVersion;
-          setGroups(remoteGroups);
-          setActiveGroupId(remoteActiveGroupId);
-          setScreen(remoteGroups.length > 0 ? "main" : "home");
-          setLastSyncTime(formatSyncTime());
-          setSyncMessage(
-            "他端末の新しい状態を検出したため、古い状態での上書きを止めました"
-          );
-          return false;
-        }
-      }
-
-      const nextSyncVersion = Math.max(
-        Date.now(),
-        latestSyncVersionRef.current + 1
-      );
-
-      await setDoc(syncRef, {
-        groups: nextGroups,
-        activeGroupId: nextActiveGroupId,
-        practiceDate: getPracticeDateKey(),
-        updatedAtMillis: nextSyncVersion,
-        updatedBy: syncClientIdRef.current,
-        updatedAt: serverTimestamp(),
+    if (
+      allowPracticePrompt &&
+      loadedGroups.length > 0 &&
+      loadedPracticeDate !== todayPracticeDate
+    ) {
+      setPracticeDayPrompt({
+        previousPracticeDate: loadedPracticeDate,
+        todayPracticeDate,
       });
+    }
 
-      latestSyncVersionRef.current = nextSyncVersion;
-      setLastSyncTime(formatSyncTime());
-      setSyncMessage("同期しました");
-      return true;
-    } catch (error) {
-      console.error("同期保存失敗", error);
-      setSyncMessage("同期に失敗しました");
-      return false;
+    setLastSyncTime(formatSyncTime());
+    setSyncMessage(message);
+  };
+
+  const applyPendingRemoteSyncIfNeeded = () => {
+    const pendingData = pendingRemoteSyncRef.current;
+    pendingRemoteSyncRef.current = null;
+
+    if (!pendingData) return;
+
+    const pendingRevision = getSyncRevision(pendingData);
+
+    if (pendingRevision > latestSyncVersionRef.current) {
+      applyRemoteSyncData(pendingData, {
+        message: "保存中に届いた他端末の最新状態を反映しました",
+        allowPracticePrompt: userMode !== "viewer",
+      });
     }
   };
 
+  const performGroupsSave = async (
+    nextGroups,
+    nextActiveGroupId,
+    options = {}
+  ) => {
+    const targetCircleId = options.circleId || currentCircle?.circleId;
+
+    if (!targetCircleId) return false;
+
+    pendingSaveCountRef.current += 1;
+    setIsSyncSaving(true);
+    setAutoSyncStatus("保存中");
+
+    const expectedRevision = latestSyncVersionRef.current;
+    const operationId = `${syncClientIdRef.current}-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}`;
+
+    try {
+      const syncRef = getSyncDocRef(targetCircleId);
+
+      const result = await runTransaction(db, async (transaction) => {
+        const latestSnap = await transaction.get(syncRef);
+        const latestData = latestSnap.exists() ? latestSnap.data() : null;
+        const remoteRevision = getSyncRevision(latestData);
+
+        // 読み込んだrevisionとサーバーのrevisionが違う場合は、絶対に上書きしません。
+        if (remoteRevision !== expectedRevision) {
+          return {
+            saved: false,
+            conflict: true,
+            remoteData: latestData,
+            remoteRevision,
+          };
+        }
+
+        const nextRevision = remoteRevision + 1;
+
+        transaction.set(syncRef, {
+          groups: nextGroups,
+          activeGroupId: nextActiveGroupId,
+          practiceDate: getPracticeDateKey(),
+          revision: nextRevision,
+          baseRevision: remoteRevision,
+          schemaVersion: 2,
+          operationId,
+          updatedAtMillis: Date.now(),
+          updatedBy: syncClientIdRef.current,
+          updatedAt: serverTimestamp(),
+        });
+
+        return {
+          saved: true,
+          conflict: false,
+          nextRevision,
+        };
+      });
+
+      if (!result.saved) {
+        if (result.remoteData) {
+          applyRemoteSyncData(result.remoteData, {
+            message:
+              "別端末が先に更新したため、この端末の古い保存は中止し、最新状態を反映しました",
+            allowPracticePrompt: userMode !== "viewer",
+          });
+        } else {
+          latestSyncVersionRef.current = result.remoteRevision || 0;
+          syncInitializedRef.current = true;
+          setSyncMessage(
+            "別端末の更新と重なったため保存を中止しました。もう一度操作してください"
+          );
+        }
+
+        setAutoSyncStatus("競合を安全に解消しました");
+        return false;
+      }
+
+      latestSyncVersionRef.current = result.nextRevision;
+      syncInitializedRef.current = true;
+      setLastSyncTime(formatSyncTime());
+      setSyncMessage(options.successMessage || "保存・同期しました");
+      setAutoSyncStatus("自動同期中");
+      return true;
+    } catch (error) {
+      console.error("同期保存失敗", error);
+      setSyncMessage(
+        "同期保存に失敗しました。通信を確認し、画面の同期ボタンで最新状態を読み込んでください"
+      );
+      setAutoSyncStatus("保存エラー");
+      return false;
+    } finally {
+      pendingSaveCountRef.current = Math.max(
+        0,
+        pendingSaveCountRef.current - 1
+      );
+
+      if (pendingSaveCountRef.current === 0) {
+        setIsSyncSaving(false);
+        applyPendingRemoteSyncIfNeeded();
+      }
+    }
+  };
+
+  const saveGroupsToFirestore = (
+    nextGroups = groups,
+    nextActiveGroupId = activeGroupId,
+    options = {}
+  ) => {
+    // 同じ端末内の保存も必ず1件ずつ順番に処理します。
+    // 連打や複数コートの同時操作で、古い保存が後から到着することを防ぎます。
+    const queuedSave = saveQueueRef.current
+      .catch(() => undefined)
+      .then(() =>
+        performGroupsSave(nextGroups, nextActiveGroupId, options)
+      );
+
+    saveQueueRef.current = queuedSave.then(
+      () => undefined,
+      () => undefined
+    );
+
+    return queuedSave;
+  };
+
   const loadGroupsFromFirestore = async () => {
-    if (!currentCircle) return;
+    if (!currentCircle || isSyncSaving) return;
+
+    setAutoSyncStatus("サーバーから最新状態を取得中");
 
     try {
       const syncRef = getSyncDocRef(currentCircle.circleId);
-      const snap = await getDoc(syncRef);
+      // getDoc では端末キャッシュが返る場合があるため、手動同期は必ずサーバーを参照します。
+      const snap = await getDocFromServer(syncRef);
 
       if (!snap.exists()) {
+        latestSyncVersionRef.current = 0;
+        syncInitializedRef.current = true;
         setSyncMessage("同期データはまだありません");
+        setAutoSyncStatus("同期データ待機中");
         return;
       }
 
       const data = snap.data();
-      const incomingSyncVersion =
-        typeof data.updatedAtMillis === "number" ? data.updatedAtMillis : 0;
-
-      if (incomingSyncVersion < latestSyncVersionRef.current) {
-        setSyncMessage("古い同期データだったため読み込みませんでした");
-        return;
-      }
-
-      latestSyncVersionRef.current = Math.max(
-        latestSyncVersionRef.current,
-        incomingSyncVersion
-      );
-
-      const loadedGroups = Array.isArray(data.groups) ? data.groups : [];
-      const loadedActiveGroupId = data.activeGroupId || loadedGroups[0]?.id || null;
-      const loadedPracticeDate = data.practiceDate || getPracticeDateKey();
-      const todayPracticeDate = getPracticeDateKey();
-
-      setGroups(loadedGroups);
-      setActiveGroupId(loadedActiveGroupId);
-
-      if (loadedGroups.length > 0) {
-        setScreen("main");
-      } else {
-        setScreen("home");
-      }
-
-      if (
-        userMode !== "viewer" &&
-        loadedGroups.length > 0 &&
-        loadedPracticeDate !== todayPracticeDate
-      ) {
-        setPracticeDayPrompt({
-          previousPracticeDate: loadedPracticeDate,
-          todayPracticeDate,
-        });
-      }
-
-      setLastSyncTime(formatSyncTime());
-      setSyncMessage("最新状態を読み込みました");
+      applyRemoteSyncData(data, {
+        message: "サーバーの最新状態を読み込みました",
+        allowPracticePrompt: userMode !== "viewer",
+      });
+      setAutoSyncStatus("自動同期中");
     } catch (error) {
       console.error("同期読み込み失敗", error);
-      setSyncMessage("読み込みに失敗しました");
+      setSyncMessage(
+        "サーバーから最新状態を取得できませんでした。通信状態を確認してください"
+      );
+      setAutoSyncStatus("読み込みエラー");
     }
   };
   const handleCreateCircle = async () => {
@@ -1190,22 +1310,16 @@ export default function App() {
 
       try {
         const syncRef = doc(db, "circles", circleId, "sync", "current");
-        const syncSnap = await getDoc(syncRef);
+        const syncSnap = await getDocFromServer(syncRef);
 
         if (syncSnap.exists()) {
-          const syncData = syncSnap.data();
-          const loadedGroups = Array.isArray(syncData.groups)
-            ? syncData.groups
-            : [];
-
-          setGroups(loadedGroups);
-          setActiveGroupId(
-            syncData.activeGroupId || loadedGroups[0]?.id || null
-          );
-
-          if (loadedGroups.length > 0) {
-            setScreen("main");
-          }
+          applyRemoteSyncData(syncSnap.data(), {
+            message: "サーバーの最新状態を読み込みました",
+            allowPracticePrompt: !isViewerPassword,
+          });
+        } else {
+          latestSyncVersionRef.current = 0;
+          syncInitializedRef.current = true;
         }
       } catch (syncError) {
         console.error("同期読み込み失敗", syncError);
@@ -1256,22 +1370,20 @@ export default function App() {
       await loadMembersFromFirestore(circleId);
 
       const syncRef = doc(db, "circles", circleId, "sync", "current");
-      const syncSnap = await getDoc(syncRef);
+      const syncSnap = await getDocFromServer(syncRef);
 
       if (syncSnap.exists()) {
-        const syncData = syncSnap.data();
-        const loadedGroups = Array.isArray(syncData.groups)
-          ? syncData.groups
-          : [];
-
-        setGroups(loadedGroups);
-        setActiveGroupId(syncData.activeGroupId || loadedGroups[0]?.id || null);
+        applyRemoteSyncData(syncSnap.data(), {
+          message: "閲覧用の最新状態を読み込みました",
+          allowPracticePrompt: false,
+        });
       } else {
+        latestSyncVersionRef.current = 0;
+        syncInitializedRef.current = true;
         setGroups([]);
         setActiveGroupId(null);
+        setScreen("home");
       }
-
-      setScreen("home");
     } catch (error) {
       console.error("閲覧用URLログイン失敗", error);
       setAuthError("閲覧用URLでの読み込みに失敗しました");
@@ -1319,6 +1431,12 @@ export default function App() {
     setTempSelectedIds([]);
     setPracticeDayPrompt(null);
     setViewerUrlCopyMessage("");
+    latestSyncVersionRef.current = 0;
+    syncInitializedRef.current = false;
+    pendingSaveCountRef.current = 0;
+    pendingRemoteSyncRef.current = null;
+    saveQueueRef.current = Promise.resolve();
+    setIsSyncSaving(false);
 
   };
 
@@ -1904,25 +2022,23 @@ export default function App() {
       }));
 
       if (nextGroupsForRateDisplay.length > 0) {
-        const syncRef = doc(db, "circles", nextCircleId, "sync", "current");
-
-        const nextSyncVersion = Math.max(
-          Date.now(),
-          latestSyncVersionRef.current + 1
+        const saved = await saveGroupsToFirestore(
+          nextGroupsForRateDisplay,
+          activeGroupId,
+          {
+            circleId: nextCircleId,
+            successMessage: "管理者設定を保存・同期しました",
+          }
         );
 
-        await setDoc(syncRef, {
-          groups: nextGroupsForRateDisplay,
-          activeGroupId,
-          practiceDate: getPracticeDateKey(),
-          updatedAtMillis: nextSyncVersion,
-          updatedBy: syncClientIdRef.current,
-          updatedAt: serverTimestamp(),
-        });
+        if (!saved) {
+          setAdminError(
+            "他端末の更新と重なったため設定の同期を中止しました。最新状態を確認して、もう一度保存してください"
+          );
+          return;
+        }
 
-        latestSyncVersionRef.current = nextSyncVersion;
         setGroups(nextGroupsForRateDisplay);
-        setLastSyncTime(formatSyncTime());
       }
 
       setAdminError("");
@@ -4165,8 +4281,12 @@ export default function App() {
 
 
         <div className="syncRow">
-          <button className="syncButton" onClick={loadGroupsFromFirestore}>
-            同期
+          <button
+            className="syncButton"
+            onClick={loadGroupsFromFirestore}
+            disabled={isSyncSaving}
+          >
+            {isSyncSaving ? "保存中..." : "同期"}
           </button>
           <span className="syncStatus">
             {lastSyncTime ? `最終同期：${lastSyncTime}` : "未同期"}

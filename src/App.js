@@ -6,6 +6,7 @@ import {
   getDoc,
   getDocFromServer,
   getDocs,
+  getDocsFromServer,
   onSnapshot,
   runTransaction,
   serverTimestamp,
@@ -295,6 +296,7 @@ const kanaJumpGroups = [
   { key: "わ", label: "わ", chars: ["わ", "を", "ん"] },
   { key: "英", label: "英", chars: [] },
   { key: "数", label: "数", chars: [] },
+  { key: "他", label: "他", chars: [] },
 ];
 
 function getKanaJumpGroupKey(member) {
@@ -709,6 +711,9 @@ export default function App() {
   const pendingSaveCountRef = useRef(0);
   const saveQueueRef = useRef(Promise.resolve());
   const pendingRemoteSyncRef = useRef(null);
+  // メンバー表示安定化1：サーバー由来の一覧を取得済みか保持し、
+  // 後から届く古いキャッシュで表示中のメンバー一覧を巻き戻さない。
+  const membersServerReadyRef = useRef(false);
   const [adminSettingsForm, setAdminSettingsForm] = useState({
     circleName: "",
     circleId: "",
@@ -788,6 +793,7 @@ export default function App() {
     pendingSaveCountRef.current = 0;
     pendingRemoteSyncRef.current = null;
     saveQueueRef.current = Promise.resolve();
+    membersServerReadyRef.current = false;
     setIsSyncSaving(false);
   }, [currentCircle?.circleId]);
 
@@ -878,7 +884,22 @@ export default function App() {
 
     const unsubscribe = onSnapshot(
       membersRef,
+      { includeMetadataChanges: true },
       (snapshot) => {
+        // メンバー表示安定化1：一度サーバーの最新一覧を確認した後は、
+        // pending write を含まない古い端末キャッシュで一覧を巻き戻さない。
+        if (
+          snapshot.metadata.fromCache &&
+          membersServerReadyRef.current &&
+          !snapshot.metadata.hasPendingWrites
+        ) {
+          return;
+        }
+
+        if (!snapshot.metadata.fromCache) {
+          membersServerReadyRef.current = true;
+        }
+
         const loadedMembers = snapshot.docs.map((memberDoc) => ({
           id: memberDoc.id,
           ...memberDoc.data(),
@@ -908,7 +929,16 @@ export default function App() {
 
     try {
       const membersRef = getMembersCollectionRef(circleId);
-      const snapshot = await getDocs(membersRef);
+      let snapshot;
+
+      try {
+        // メンバー表示安定化1：可能な限り必ずサーバーの最新一覧を取得する。
+        snapshot = await getDocsFromServer(membersRef);
+        membersServerReadyRef.current = true;
+      } catch (serverError) {
+        console.warn("メンバーのサーバー取得に失敗したためキャッシュを使用", serverError);
+        snapshot = await getDocs(membersRef);
+      }
 
       const loadedMembers = snapshot.docs.map((memberDoc) => ({
         id: memberDoc.id,
@@ -916,10 +946,32 @@ export default function App() {
       }));
 
       setMembers(loadedMembers);
+      return loadedMembers;
     } catch (error) {
       setAuthError("メンバー情報の読み込みに失敗しました");
+      return [];
     } finally {
       setMemberLoading(false);
+    }
+  };
+
+  const refreshMembersFromServer = async (circleId) => {
+    if (!circleId) return [];
+
+    try {
+      const membersRef = getMembersCollectionRef(circleId);
+      const snapshot = await getDocsFromServer(membersRef);
+      const loadedMembers = snapshot.docs.map((memberDoc) => ({
+        id: memberDoc.id,
+        ...memberDoc.data(),
+      }));
+
+      membersServerReadyRef.current = true;
+      setMembers(loadedMembers);
+      return loadedMembers;
+    } catch (error) {
+      console.error("メンバー最新一覧の再取得失敗", error);
+      return [];
     }
   };
 
@@ -968,8 +1020,6 @@ export default function App() {
   ) => {
     const incomingRevision = getSyncRevision(data);
     const loadedGroups = Array.isArray(data?.groups) ? data.groups : [];
-    const loadedActiveGroupId =
-      data?.activeGroupId || loadedGroups[0]?.id || null;
     const loadedPracticeDate = data?.practiceDate || getPracticeDateKey();
     const todayPracticeDate = getPracticeDateKey();
 
@@ -977,7 +1027,19 @@ export default function App() {
     syncInitializedRef.current = true;
 
     setGroups(loadedGroups);
-    setActiveGroupId(loadedActiveGroupId);
+
+    // グループ独立化1：activeGroupId は端末ごとの表示状態。
+    // 他端末が中級を開いたからといって、この端末の上級表示を中級へ切り替えない。
+    setActiveGroupId((currentActiveGroupId) => {
+      if (
+        currentActiveGroupId &&
+        loadedGroups.some((group) => group.id === currentActiveGroupId)
+      ) {
+        return currentActiveGroupId;
+      }
+
+      return loadedGroups[0]?.id || null;
+    });
     setScreen(loadedGroups.length > 0 ? "main" : "home");
 
     if (
@@ -1051,7 +1113,7 @@ export default function App() {
 
         transaction.set(syncRef, {
           groups: nextGroups,
-          activeGroupId: nextActiveGroupId,
+          // グループ独立化1：どのグループを開いているかは端末ローカルの状態なので同期しない。
           practiceDate: getPracticeDateKey(),
           revision: nextRevision,
           baseRevision: remoteRevision,
@@ -2468,6 +2530,8 @@ export default function App() {
         )
       );
 
+      await refreshMembersFromServer(currentCircle.circleId);
+
       setTempSelectedIds((prevIds) => [
         ...prevIds,
         ...copiedMembers.map((member) => member.id),
@@ -2527,8 +2591,13 @@ export default function App() {
     try {
       await saveMemberToFirestore(currentCircle.circleId, newMember);
 
-      setMembers([...members, newMember]);
+      setMembers((prevMembers) =>
+        prevMembers.some((member) => member.id === newMember.id)
+          ? prevMembers
+          : [...prevMembers, newMember]
+      );
       setTempSelectedIds((prevIds) => [...prevIds, newMember.id]);
+      await refreshMembersFromServer(currentCircle.circleId);
       setMemberForm(emptyMemberForm);
       setMemberFormError(false);
       setDuplicateNicknameError("");
@@ -2981,7 +3050,12 @@ export default function App() {
     try {
       await saveMemberToFirestore(currentCircle.circleId, newMember);
 
-      setMembers((prevMembers) => [...prevMembers, newMember]);
+      setMembers((prevMembers) =>
+        prevMembers.some((member) => member.id === newMember.id)
+          ? prevMembers
+          : [...prevMembers, newMember]
+      );
+      await refreshMembersFromServer(currentCircle.circleId);
       setViewerSelectedMemberId(newMember.id);
       setViewerMemberForm(emptyMemberForm);
       setViewerMemberFormError(false);

@@ -1651,3 +1651,104 @@ div.authModeButton {
   font-size: 13px;
   font-weight: bold;
 }
+
+/* 完成10追加改善：メンバー表示安定化2 */
+.memberLoadingBox {
+  margin: 14px 0;
+  padding: 18px 12px;
+  border-radius: 14px;
+  background: #f3f4f6;
+  color: #374151;
+  text-align: center;
+  font-weight: bold;
+}
+
+.memberListCount {
+  margin: 10px 0 4px;
+  color: #4b5563;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+/* 完成10追加改善：コート入れ替え1 */
+.courtSwapButton {
+  background: #0f766e;
+  color: white;
+}
+
+.activeCourtSwapButton {
+  background: #115e59;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.2);
+}
+
+.courtSwapGuide {
+  margin: 10px 0 0;
+  padding: 9px 10px;
+  border-radius: 12px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #047857;
+  font-size: 13px;
+  font-weight: bold;
+  line-height: 1.5;
+}
+
+.courtSwapSelectButton {
+  position: relative;
+  z-index: 3;
+  width: 100%;
+  margin-bottom: 8px;
+  background: #0f766e;
+  color: white;
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.courtSwapSelected {
+  outline: 4px solid #0f766e;
+  outline-offset: 2px;
+}
+
+/* 完成10追加改善：確定ボタン配置変更1・確定処理中1 */
+.courtMiddleRow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 34px;
+}
+
+.inlineConfirmButton {
+  padding: 7px 12px;
+  border-radius: 10px;
+  background: #111827;
+  color: white;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.confirmProcessingText {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 12px;
+  border-radius: 10px;
+  background: #e5e7eb;
+  color: #374151;
+  font-size: 12px;
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+/* 完成10追加改善：最終操作端末表示1 */
+.lastOperationStatus {
+  margin: 6px 0 0;
+  padding: 7px 9px;
+  border-radius: 10px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  color: #374151;
+  font-size: 12px;
+  font-weight: bold;
+  line-height: 1.5;
+}

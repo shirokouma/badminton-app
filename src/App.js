@@ -593,6 +593,40 @@ function buildQrCodeUrl(text) {
   return `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(text)}`;
 }
 
+// 端末自動識別1：手入力なしで大まかな端末種別を判定する
+function detectDeviceType() {
+  if (typeof navigator === "undefined") return "不明";
+
+  const userAgent = navigator.userAgent || "";
+  const platform = navigator.platform || "";
+  const maxTouchPoints = navigator.maxTouchPoints || 0;
+
+  // iPadOS 13以降はMacとして見えることがあるため先に判定する
+  if (/iPad/i.test(userAgent) || (platform === "MacIntel" && maxTouchPoints > 1)) {
+    return "iPad";
+  }
+
+  if (/iPhone/i.test(userAgent)) return "iPhone";
+  if (/Android/i.test(userAgent)) return "Android";
+  if (/Windows/i.test(userAgent) || /^Win/i.test(platform)) return "Windows PC";
+  if (/Macintosh|Mac OS X/i.test(userAgent) || /^Mac/i.test(platform)) return "Mac";
+
+  return "不明";
+}
+
+function formatOperationTime(value) {
+  if (!value) return "";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  return date.toLocaleTimeString("ja-JP", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 export default function App() {
   const [authMode, setAuthMode] = useState("login");
   const [currentCircle, setCurrentCircle] = useState(null);
@@ -675,6 +709,11 @@ export default function App() {
   const [isSyncSaving, setIsSyncSaving] = useState(false);
   const [practiceDayPrompt, setPracticeDayPrompt] = useState(null);
   const [viewerUrlCopyMessage, setViewerUrlCopyMessage] = useState("");
+  const [lastOperationDevice, setLastOperationDevice] = useState("");
+  const [lastOperationTime, setLastOperationTime] = useState("");
+  const [isCourtSwapMode, setIsCourtSwapMode] = useState(false);
+  const [selectedCourtSwapIndex, setSelectedCourtSwapIndex] = useState(null);
+  const [confirmingCourts, setConfirmingCourts] = useState({});
 
   const [isAdminSettingsOpen, setIsAdminSettingsOpen] = useState(false);
   const [adminPasswordInput, setAdminPasswordInput] = useState("");
@@ -702,6 +741,7 @@ export default function App() {
   const participationGroupRefs = useRef({});
   const viewerGroupRefs = useRef({});
   const adminGroupRefs = useRef({});
+  const deviceTypeRef = useRef(detectDeviceType());
   const syncClientIdRef = useRef(
     `client-${Date.now()}-${Math.random().toString(36).slice(2)}`
   );
@@ -795,6 +835,11 @@ export default function App() {
     saveQueueRef.current = Promise.resolve();
     membersServerReadyRef.current = false;
     setIsSyncSaving(false);
+    setLastOperationDevice("");
+    setLastOperationTime("");
+    setIsCourtSwapMode(false);
+    setSelectedCourtSwapIndex(null);
+    setConfirmingCourts({});
   }, [currentCircle?.circleId]);
 
   useEffect(() => {
@@ -975,6 +1020,46 @@ export default function App() {
     }
   };
 
+  // メンバー表示安定化2：参加画面を開くたびにサーバーの最新一覧を確認する。
+  // サーバーに接続できない場合はFirestoreキャッシュ、さらに失敗した場合は現在の表示を維持する。
+  const refreshMembersForParticipation = async () => {
+    if (!currentCircle?.circleId) return members;
+
+    setMemberLoading(true);
+
+    try {
+      const membersRef = getMembersCollectionRef(currentCircle.circleId);
+      let snapshot;
+
+      try {
+        snapshot = await getDocsFromServer(membersRef);
+        membersServerReadyRef.current = true;
+      } catch (serverError) {
+        console.warn(
+          "参加画面のメンバーをサーバーから取得できないためキャッシュを確認します",
+          serverError
+        );
+        snapshot = await getDocs(membersRef);
+      }
+
+      const loadedMembers = snapshot.docs.map((memberDoc) => ({
+        id: memberDoc.id,
+        ...memberDoc.data(),
+      }));
+
+      setMembers(loadedMembers);
+      return loadedMembers;
+    } catch (error) {
+      console.error("参加画面のメンバー最新化に失敗", error);
+      setParticipationError(
+        "最新メンバーの取得に失敗したため、この端末に保存されている一覧を表示しています"
+      );
+      return members;
+    } finally {
+      setMemberLoading(false);
+    }
+  };
+
   const saveMemberToFirestore = async (circleId, member) => {
     const memberRef = getMemberDocRef(circleId, member.id);
     await setDoc(memberRef, member);
@@ -1042,6 +1127,9 @@ export default function App() {
     });
     setScreen(loadedGroups.length > 0 ? "main" : "home");
 
+    setLastOperationDevice(data?.updatedDevice || "");
+    setLastOperationTime(formatOperationTime(data?.updatedAtMillis));
+
     if (
       allowPracticePrompt &&
       loadedGroups.length > 0 &&
@@ -1087,7 +1175,8 @@ export default function App() {
     setAutoSyncStatus("保存中");
 
     const expectedRevision = latestSyncVersionRef.current;
-    const operationId = `${syncClientIdRef.current}-${Date.now()}-${Math.random()
+    const operationTimeMillis = Date.now();
+    const operationId = `${syncClientIdRef.current}-${operationTimeMillis}-${Math.random()
       .toString(36)
       .slice(2)}`;
 
@@ -1119,8 +1208,9 @@ export default function App() {
           baseRevision: remoteRevision,
           schemaVersion: 2,
           operationId,
-          updatedAtMillis: Date.now(),
+          updatedAtMillis: operationTimeMillis,
           updatedBy: syncClientIdRef.current,
+          updatedDevice: deviceTypeRef.current,
           updatedAt: serverTimestamp(),
         });
 
@@ -1153,6 +1243,8 @@ export default function App() {
       latestSyncVersionRef.current = result.nextRevision;
       syncInitializedRef.current = true;
       setLastSyncTime(formatSyncTime());
+      setLastOperationDevice(deviceTypeRef.current);
+      setLastOperationTime(formatOperationTime(operationTimeMillis));
       setSyncMessage(options.successMessage || "保存・同期しました");
       setAutoSyncStatus("自動同期中");
       return true;
@@ -1493,6 +1585,11 @@ export default function App() {
     setTempSelectedIds([]);
     setPracticeDayPrompt(null);
     setViewerUrlCopyMessage("");
+    setLastOperationDevice("");
+    setLastOperationTime("");
+    setIsCourtSwapMode(false);
+    setSelectedCourtSwapIndex(null);
+    setConfirmingCourts({});
     latestSyncVersionRef.current = 0;
     syncInitializedRef.current = false;
     pendingSaveCountRef.current = 0;
@@ -1708,6 +1805,8 @@ export default function App() {
     setEditingMemberId(null);
     setEditDeleteError("");
     setIsEditSelectMode(false);
+    setIsCourtSwapMode(false);
+    setSelectedCourtSwapIndex(null);
 
   };
 
@@ -2264,7 +2363,7 @@ export default function App() {
     }
   };
 
-  const openParticipationModal = () => {
+  const openParticipationModal = async () => {
     const ids = new Set();
 
     waitingMembers.forEach((member) => ids.add(member.id));
@@ -2296,6 +2395,9 @@ export default function App() {
     setEditDeleteError("");
     setParticipationError("");
     setIsParticipationModalOpen(true);
+
+    // 画面を先に開いて「読み込み中」を見せ、その後サーバーの最新メンバーを反映する。
+    await refreshMembersForParticipation();
   };
 
   const closeParticipationModal = () => {
@@ -2597,7 +2699,7 @@ export default function App() {
           : [...prevMembers, newMember]
       );
       setTempSelectedIds((prevIds) => [...prevIds, newMember.id]);
-      await refreshMembersFromServer(currentCircle.circleId);
+      await refreshMembersForParticipation();
       setMemberForm(emptyMemberForm);
       setMemberFormError(false);
       setDuplicateNicknameError("");
@@ -2737,6 +2839,7 @@ export default function App() {
   };
   const handleSwapTap = async (member, location) => {
     if (!member) return;
+    if (isCourtSwapMode) return;
 
     if (!selectedSwap) {
       updateActiveGroup({ selectedSwap: { member, location } });
@@ -2798,6 +2901,57 @@ export default function App() {
 
   const isSwapSelected = (member) => {
     return selectedSwap?.member?.id === member.id;
+  };
+
+  // コート入れ替え1：試合内容をコート単位で丸ごと入れ替える。空きコートとの移動も可能。
+  const toggleCourtSwapMode = () => {
+    setIsCourtSwapMode((prev) => {
+      const next = !prev;
+      if (!next) setSelectedCourtSwapIndex(null);
+      return next;
+    });
+  };
+
+  const selectCourtForSwap = async (index) => {
+    if (!activeGroup || isSyncSaving) return;
+
+    if (selectedCourtSwapIndex === null) {
+      setSelectedCourtSwapIndex(index);
+      return;
+    }
+
+    if (selectedCourtSwapIndex === index) {
+      setSelectedCourtSwapIndex(null);
+      return;
+    }
+
+    const firstIndex = selectedCourtSwapIndex;
+    const nextCourts = [...courts];
+    const firstCourt = nextCourts[firstIndex] ?? null;
+    nextCourts[firstIndex] = nextCourts[index] ?? null;
+    nextCourts[index] = firstCourt;
+
+    const nextGroups = groups.map((group) => {
+      if (group.id !== activeGroupId) return group;
+
+      return {
+        ...group,
+        courts: nextCourts,
+        selectedSwap: null,
+      };
+    });
+
+    setGroups(nextGroups);
+    setSelectedCourtSwapIndex(null);
+    setIsCourtSwapMode(false);
+
+    const saved = await saveGroupsToFirestore(nextGroups, activeGroupId, {
+      successMessage: `コート${getCircledNumber(firstIndex + 1)}とコート${getCircledNumber(index + 1)}を入れ替えました`,
+    });
+
+    if (!saved) {
+      setSyncMessage("コート入れ替えが他端末の更新と重なりました。最新状態を確認してください");
+    }
   };
 
   const generateCourt = async (index) => {
@@ -2914,6 +3068,10 @@ export default function App() {
 
     const targetCourt = courts[index];
     if (!targetCourt || !targetCourt.winner) return;
+    if (confirmingCourts[index]) return;
+
+    // 確定処理中1：押した瞬間に確定ボタンを消して二重操作を防ぐ。
+    setConfirmingCourts((prev) => ({ ...prev, [index]: true }));
 
     const winnerTeam =
       targetCourt.winner === "A" ? targetCourt.teamA : targetCourt.teamB;
@@ -2997,9 +3155,24 @@ export default function App() {
 
       setGroups(nextGroups);
 
-      await saveGroupsToFirestore(nextGroups, activeGroupId);
+      const saved = await saveGroupsToFirestore(nextGroups, activeGroupId, {
+        successMessage: "試合結果を確定・同期しました",
+      });
+
+      if (!saved) {
+        await refreshMembersFromServer(currentCircle.circleId);
+        setSyncMessage(
+          "確定処理が他端末の更新と重なりました。最新状態を反映したので内容を確認してください"
+        );
+      }
     } catch (error) {
       alert("レートの保存に失敗しました");
+    } finally {
+      setConfirmingCourts((prev) => {
+        const next = { ...prev };
+        delete next[index];
+        return next;
+      });
     }
   };
 
@@ -3730,7 +3903,7 @@ export default function App() {
               : ""
           }`
         }
-        onClick={() => !isViewerMode && handleSwapTap(member, location)}
+        onClick={() => !isViewerMode && !isCourtSwapMode && handleSwapTap(member, location)}
       >
         <span>{member.nickname || member.name}</span>
 
@@ -3750,12 +3923,26 @@ export default function App() {
   const renderCourt = (courtNumber) => {
     const index = courtNumber - 1;
     const court = courts[index];
+    const isConfirming = Boolean(confirmingCourts[index]);
+    const isSelectedForCourtSwap = selectedCourtSwapIndex === index;
 
     return (
       <div
         key={index}
-        className="courtVisual"
+        className={`courtVisual ${isSelectedForCourtSwap ? "courtSwapSelected" : ""}`}
       >
+        {!isViewerMode && isCourtSwapMode && (
+          <button
+            className="courtSwapSelectButton"
+            onClick={() => selectCourtForSwap(index)}
+            disabled={isSyncSaving || isConfirming}
+          >
+            {isSelectedForCourtSwap
+              ? `コート${getCircledNumber(courtNumber)} 選択中`
+              : `コート${getCircledNumber(courtNumber)}を選択`}
+          </button>
+        )}
+
         {court ? (
           <div className="game">
             <div className={court.winner === "A" ? "teamBox teamBoxWin" : "teamBox"}>
@@ -3771,13 +3958,35 @@ export default function App() {
                 )}
               </div>
               {!isViewerMode && (
-                <button className="winButton" onClick={() => setWinner(index, "A")}>
+                <button
+                  className="winButton"
+                  onClick={() => setWinner(index, "A")}
+                  disabled={isConfirming || isSyncSaving || isCourtSwapMode}
+                >
                   勝ち
                 </button>
               )}
             </div>
 
-            <div className="vs">VS <span className="courtNumberBadge">{getCircledNumber(courtNumber)}</span></div>
+            <div className="vs courtMiddleRow">
+              <span>
+                VS <span className="courtNumberBadge">{getCircledNumber(courtNumber)}</span>
+              </span>
+
+              {!isViewerMode && court.winner && (
+                isConfirming ? (
+                  <span className="confirmProcessingText">処理中…</span>
+                ) : (
+                  <button
+                    className="inlineConfirmButton"
+                    onClick={() => confirmCourtResult(index)}
+                    disabled={isSyncSaving || isCourtSwapMode}
+                  >
+                    確定
+                  </button>
+                )
+              )}
+            </div>
 
             <div className={court.winner === "B" ? "teamBox teamBoxWin" : "teamBox"}>
               {court.winner === "B" && <div className="winText">WIN</div>}
@@ -3792,7 +4001,11 @@ export default function App() {
                 )}
               </div>
               {!isViewerMode && (
-                <button className="winButton" onClick={() => setWinner(index, "B")}>
+                <button
+                  className="winButton"
+                  onClick={() => setWinner(index, "B")}
+                  disabled={isConfirming || isSyncSaving || isCourtSwapMode}
+                >
                   勝ち
                 </button>
               )}
@@ -3803,15 +4016,20 @@ export default function App() {
         )}
 
         {!isViewerMode && (
-          <div className="row">
+          <div className="row courtActionRow">
+            {!court?.winner && (
+              <button
+                onClick={() => generateCourt(index)}
+                disabled={isConfirming || isSyncSaving || isCourtSwapMode}
+              >
+                新規
+              </button>
+            )}
             <button
-              onClick={() =>
-                court?.winner ? confirmCourtResult(index) : generateCourt(index)
-              }
+              className="subButton"
+              onClick={() => clearCourt(index)}
+              disabled={isConfirming || isSyncSaving || isCourtSwapMode}
             >
-              {court?.winner ? "確定" : "新規"}
-            </button>
-            <button className="subButton" onClick={() => clearCourt(index)}>
               消す
             </button>
           </div>
@@ -4344,7 +4562,27 @@ export default function App() {
             <button onClick={openCourtDeleteLayoutSelect}>
               コート削除
             </button>
+
+            <button
+              className={
+                isCourtSwapMode
+                  ? "courtSwapButton activeCourtSwapButton"
+                  : "courtSwapButton"
+              }
+              onClick={toggleCourtSwapMode}
+              disabled={isSyncSaving}
+            >
+              {isCourtSwapMode ? "入れ替えを終了" : "コート入れ替え"}
+            </button>
           </div>
+        )}
+
+        {!isViewerMode && isCourtSwapMode && (
+          <p className="courtSwapGuide">
+            {selectedCourtSwapIndex === null
+              ? "入れ替える1つ目のコートを選択してください（空きコートも選べます）"
+              : `コート${getCircledNumber(selectedCourtSwapIndex + 1)}を選択中です。入れ替える2つ目のコートを選択してください`}
+          </p>
         )}
 
         {isViewerMode && (
@@ -4366,6 +4604,13 @@ export default function App() {
             {lastSyncTime ? `最終同期：${lastSyncTime}` : "未同期"}
           </span>
         </div>
+
+        {lastOperationDevice && (
+          <p className="lastOperationStatus">
+            最終操作端末：{lastOperationDevice}
+            {lastOperationTime ? `　最終更新：${lastOperationTime}` : ""}
+          </p>
+        )}
 
         {syncMessage && <p className="syncMessage">{syncMessage}</p>}
         {autoSyncStatus && <p className="autoSyncStatus">{autoSyncStatus}</p>}
@@ -4448,6 +4693,7 @@ export default function App() {
               }
               onClick={() =>
                 !isViewerMode &&
+                !isCourtSwapMode &&
                 handleSwapTap(member, {
                   type: "waiting",
                   index,
@@ -5276,7 +5522,16 @@ export default function App() {
                 isEdit: true,
               })}
 
-            {renderGroupedMemberList({
+            {memberLoading ? (
+              <div className="memberLoadingBox">
+                メンバー読み込み中…
+              </div>
+            ) : (
+              <>
+                <p className="memberListCount">
+                  登録メンバー：{members.length}人 / 表示中：{filteredMembers.length}人
+                </p>
+                {renderGroupedMemberList({
               membersForList: filteredMembers,
               refs: participationGroupRefs,
               renderMember: (member) => {
@@ -5319,6 +5574,8 @@ export default function App() {
                 );
               },
             })}
+              </>
+            )}
 
             <div className="bottomActions">
               <button onClick={decideParticipation}>決定</button>

@@ -614,6 +614,113 @@ function detectDeviceType() {
   return "不明";
 }
 
+// 読み方自動入力1：カタカナをひらがなへ正規化する
+function katakanaToHiragana(value = "") {
+  return String(value).replace(/[ァ-ヶ]/g, (char) =>
+    String.fromCharCode(char.charCodeAt(0) - 0x60)
+  );
+}
+
+// 読み方欄は「ひらがな・英字・数字・長音・空白」のみ保持する。
+// 漢字や記号は読み方欄には残さない。
+function normalizeReadingInput(value = "") {
+  return katakanaToHiragana(value)
+    .replace(/[^ぁ-ゖゝゞーa-zA-Z0-9\s]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function containsKanji(value = "") {
+  return /[一-龯々〆ヵヶ]/.test(String(value));
+}
+
+// 外部APIや個人情報の送信を使わずに動かすため、よく使われる名字だけ
+// 安全なローカル候補として持つ。候補にない漢字名は読み方を空欄のままにし、本人確認を優先する。
+const COMMON_NAME_READING_MAP = {
+  "佐藤": "さとう", "鈴木": "すずき", "高橋": "たかはし", "田中": "たなか",
+  "伊藤": "いとう", "渡辺": "わたなべ", "山本": "やまもと", "中村": "なかむら",
+  "小林": "こばやし", "加藤": "かとう", "吉田": "よしだ", "山田": "やまだ",
+  "佐々木": "ささき", "山口": "やまぐち", "松本": "まつもと", "井上": "いのうえ",
+  "木村": "きむら", "林": "はやし", "斎藤": "さいとう", "齋藤": "さいとう",
+  "清水": "しみず", "山崎": "やまざき", "森": "もり", "阿部": "あべ",
+  "池田": "いけだ", "橋本": "はしもと", "山下": "やました", "石川": "いしかわ",
+  "中島": "なかじま", "前田": "まえだ", "藤田": "ふじた", "小川": "おがわ",
+  "後藤": "ごとう", "岡田": "おかだ", "長谷川": "はせがわ", "村上": "むらかみ",
+  "近藤": "こんどう", "石井": "いしい", "坂本": "さかもと", "遠藤": "えんどう",
+  "青木": "あおき", "藤井": "ふじい", "西村": "にしむら", "福田": "ふくだ",
+  "太田": "おおた", "三浦": "みうら", "藤原": "ふじわら", "岡本": "おかもと",
+  "松田": "まつだ", "中川": "なかがわ", "中野": "なかの", "原田": "はらだ",
+  "小野": "おの", "田村": "たむら", "竹内": "たけうち", "金子": "かねこ",
+  "和田": "わだ", "中山": "なかやま", "石田": "いしだ", "上田": "うえだ",
+  "森田": "もりた", "原": "はら", "柴田": "しばた", "酒井": "さかい",
+  "工藤": "くどう", "横山": "よこやま", "宮崎": "みやざき", "宮本": "みやもと",
+  "内田": "うちだ", "高木": "たかぎ", "安藤": "あんどう", "谷口": "たにぐち",
+  "大野": "おおの", "丸山": "まるやま", "今井": "いまい", "河野": "こうの",
+  "藤本": "ふじもと", "村田": "むらた", "武田": "たけだ", "上野": "うえの",
+  "杉山": "すぎやま", "増田": "ますだ", "小島": "こじま", "小山": "こやま",
+  "大塚": "おおつか", "平野": "ひらの", "菅原": "すがわら", "久保": "くぼ",
+  "松井": "まつい", "千葉": "ちば", "岩崎": "いわさき", "桜井": "さくらい",
+  "木下": "きのした", "野口": "のぐち", "松尾": "まつお", "野村": "のむら",
+  "新井": "あらい", "渡部": "わたべ", "佐野": "さの", "杉本": "すぎもと",
+  "市川": "いちかわ"
+};
+
+function getSuggestedReadingFromNickname(nickname = "") {
+  const trimmed = String(nickname).trim();
+  if (!trimmed) return "";
+
+  if (!containsKanji(trimmed)) {
+    return normalizeReadingInput(trimmed);
+  }
+
+  return COMMON_NAME_READING_MAP[trimmed] || "";
+}
+
+function updateFormNicknameWithAutoReading(form, setForm, nextNickname) {
+  const previousSuggested = getSuggestedReadingFromNickname(form.nickname || "");
+  const currentReading = form.reading || "";
+  const canAutoReplace =
+    !currentReading.trim() ||
+    currentReading === previousSuggested ||
+    currentReading === normalizeReadingInput(form.nickname || "");
+
+  const nextSuggested = getSuggestedReadingFromNickname(nextNickname);
+
+  setForm({
+    ...form,
+    nickname: nextNickname,
+    reading: canAutoReplace && nextSuggested ? nextSuggested : currentReading,
+  });
+}
+
+function hashText(value = "") {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function createCourtGameId(groupId, courtIndex) {
+  return `game-${groupId}-${courtIndex}-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 9)}`;
+}
+
+function getStableCourtGameId(groupId, courtIndex, court) {
+  if (court?.gameId) return court.gameId;
+
+  const memberIds = court
+    ? [...(court.teamA || []), ...(court.teamB || [])]
+        .map((member) => member.id)
+        .sort()
+        .join("-")
+    : "empty";
+
+  const legacySeed = `${groupId}|${courtIndex}|${memberIds}|${court?.score ?? ""}`;
+  return `legacy-${hashText(legacySeed)}`;
+}
+
 function formatOperationTime(value) {
   if (!value) return "";
 
@@ -714,6 +821,10 @@ export default function App() {
   const [isCourtSwapMode, setIsCourtSwapMode] = useState(false);
   const [selectedCourtSwapIndex, setSelectedCourtSwapIndex] = useState(null);
   const [confirmingCourts, setConfirmingCourts] = useState({});
+  const [rateHistoryItems, setRateHistoryItems] = useState([]);
+  const [rateHistoryLoading, setRateHistoryLoading] = useState(false);
+  const [rateHistoryError, setRateHistoryError] = useState("");
+  const [registrationSuccessMessage, setRegistrationSuccessMessage] = useState("");
 
   const [isAdminSettingsOpen, setIsAdminSettingsOpen] = useState(false);
   const [adminPasswordInput, setAdminPasswordInput] = useState("");
@@ -1835,11 +1946,49 @@ export default function App() {
     await saveGroupsToFirestore(nextGroups, nextActiveGroupId);
   };
 
+  const getGameResultDocRef = (circleId, gameId) => {
+    return doc(db, "circles", circleId, "gameResults", gameId);
+  };
+
+  const loadRateHistory = async () => {
+    if (!currentCircle?.circleId) return;
+
+    setRateHistoryLoading(true);
+    setRateHistoryError("");
+
+    try {
+      const historyRef = collection(
+        db,
+        "circles",
+        currentCircle.circleId,
+        "gameResults"
+      );
+      const snapshot = await getDocsFromServer(historyRef);
+      const items = snapshot.docs
+        .map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() }))
+        .sort(
+          (a, b) =>
+            Number(b.confirmedAtMillis || 0) - Number(a.confirmedAtMillis || 0)
+        )
+        .slice(0, 50);
+
+      setRateHistoryItems(items);
+    } catch (error) {
+      console.error("レート変更履歴の読み込み失敗", error);
+      setRateHistoryError(
+        "履歴を読み込めませんでした。Firestoreルールが最新版か確認してください。"
+      );
+    } finally {
+      setRateHistoryLoading(false);
+    }
+  };
+
   const openAdminSettings = () => {
     setIsAdminSettingsOpen(true);
     setAdminPasswordInput("");
     setAdminUnlocked(false);
     setAdminError("");
+    setRateHistoryError("");
     setAdminPanel("menu");
     setAdminSettingsForm({
       circleName: currentCircle?.circleName || "",
@@ -1948,7 +2097,7 @@ export default function App() {
     if (!currentCircle || !selectedAdminMember) return;
 
     const nickname = adminMemberEditForm.nickname.trim();
-    const reading = adminMemberEditForm.reading.trim();
+    const reading = normalizeReadingInput(adminMemberEditForm.reading.trim());
     const gender = adminMemberEditForm.gender;
     const rank = adminMemberEditForm.rank;
     const rate = Number(adminMemberEditForm.rate);
@@ -2421,6 +2570,7 @@ export default function App() {
     setEditDuplicateNicknameError("");
     setEditDeleteError("");
     setIsEditSelectMode(false);
+    setRegistrationSuccessMessage("");
 
   };
 
@@ -2684,7 +2834,7 @@ export default function App() {
       id: Date.now().toString(),
       nickname: memberForm.nickname.trim(),
       name: memberForm.nickname.trim(),
-      reading: memberForm.reading.trim(),
+      reading: normalizeReadingInput(memberForm.reading.trim()),
       gender: memberForm.gender,
       rank: memberForm.rank,
       rate: getInitialRate(memberForm.rank),
@@ -2704,6 +2854,8 @@ export default function App() {
       setMemberFormError(false);
       setDuplicateNicknameError("");
       setIsNewMemberFormOpen(false);
+      setRegistrationSuccessMessage("登録しました");
+      window.setTimeout(() => setRegistrationSuccessMessage(""), 2200);
     } catch (error) {
       setDuplicateNicknameError("メンバー登録に失敗しました");
     }
@@ -2754,7 +2906,7 @@ export default function App() {
     const editedData = {
       nickname: editMemberForm.nickname.trim(),
       name: editMemberForm.nickname.trim(),
-      reading: editMemberForm.reading.trim(),
+      reading: normalizeReadingInput(editMemberForm.reading.trim()),
       gender: editMemberForm.gender,
     };
 
@@ -2982,7 +3134,12 @@ export default function App() {
     const usedIds = new Set([...game.teamA, ...game.teamB].map((m) => m.id));
 
     const newCourts = [...courts];
-    newCourts[index] = { ...game, winner: null };
+    newCourts[index] = {
+      ...game,
+      winner: null,
+      gameId: createCourtGameId(activeGroupId, index),
+      createdAtMillis: Date.now(),
+    };
 
     const nextPairHistory = { ...pairHistory };
     game.pairKeys.forEach((key) => {
@@ -3064,115 +3221,307 @@ export default function App() {
   };
 
   const confirmCourtResult = async (index) => {
-    if (!currentCircle) return;
+    if (!currentCircle || !activeGroup) return;
 
     const targetCourt = courts[index];
     if (!targetCourt || !targetCourt.winner) return;
     if (confirmingCourts[index]) return;
 
-    // 確定処理中1：押した瞬間に確定ボタンを消して二重操作を防ぐ。
     setConfirmingCourts((prev) => ({ ...prev, [index]: true }));
+    pendingSaveCountRef.current += 1;
+    setIsSyncSaving(true);
+    setAutoSyncStatus("試合結果を保存中");
 
-    const winnerTeam =
-      targetCourt.winner === "A" ? targetCourt.teamA : targetCourt.teamB;
-    const loserTeam =
-      targetCourt.winner === "A" ? targetCourt.teamB : targetCourt.teamA;
-
-    const rateMove = calculateRateMove(winnerTeam, loserTeam);
-    const winnerIds = new Set(winnerTeam.map((member) => member.id));
-    const loserIds = new Set(loserTeam.map((member) => member.id));
-
-    const updateRate = (member) => {
-      if (winnerIds.has(member.id)) {
-        return applyRateToMember(member, rateMove);
-      }
-
-      if (loserIds.has(member.id)) {
-        return applyRateToMember(member, -rateMove);
-      }
-
-      return member;
-    };
-
-    const nextMembers = members.map(updateRate);
-    const changedMembers = nextMembers.filter(
-      (member) => winnerIds.has(member.id) || loserIds.has(member.id)
-    );
+    const localGameId = getStableCourtGameId(activeGroupId, index, targetCourt);
+    const confirmedAtMillis = Date.now();
 
     try {
-      await Promise.all(
-        changedMembers.map((member) =>
-          saveMemberToFirestore(currentCircle.circleId, member)
-        )
-      );
+      const syncRef = getSyncDocRef(currentCircle.circleId);
+      const historyRef = getGameResultDocRef(currentCircle.circleId, localGameId);
 
-      setMembers(nextMembers);
+      const result = await runTransaction(db, async (transaction) => {
+        const syncSnap = await transaction.get(syncRef);
+        if (!syncSnap.exists()) {
+          throw new Error("同期データが見つかりません");
+        }
 
-      const nextGroups = groups.map((group) => {
-        const updatedWaitingMembers = group.waitingMembers.map(updateRate);
+        const serverData = syncSnap.data();
+        const serverGroups = Array.isArray(serverData.groups)
+          ? serverData.groups
+          : [];
+        const serverGroup = serverGroups.find(
+          (group) => group.id === activeGroupId
+        );
 
-        const updatedCourts = group.courts.map((court, courtIndex) => {
-          if (!court) return court;
+        if (!serverGroup) {
+          return { status: "stale", remoteData: serverData };
+        }
 
-          if (group.id === activeGroupId && courtIndex === index) {
-            return null;
-          }
+        const serverCourt = serverGroup.courts?.[index];
+        if (!serverCourt) {
+          return { status: "stale", remoteData: serverData };
+        }
 
+        const serverGameId = getStableCourtGameId(
+          activeGroupId,
+          index,
+          serverCourt
+        );
+
+        if (serverGameId !== localGameId) {
+          return { status: "stale", remoteData: serverData };
+        }
+
+        const historySnap = await transaction.get(historyRef);
+        if (historySnap.exists()) {
           return {
-            ...court,
-            teamA: court.teamA.map(updateRate),
-            teamB: court.teamB.map(updateRate),
-          };
-        });
-
-        if (group.id !== activeGroupId) {
-          return {
-            ...group,
-            waitingMembers: updatedWaitingMembers,
-            courts: updatedCourts,
+            status: "duplicate",
+            remoteData: serverData,
+            historyData: historySnap.data(),
           };
         }
 
-        const updatedCourtMembers = [
-          ...targetCourt.teamA,
-          ...targetCourt.teamB,
-        ].map(updateRate);
+        const allCourtMembers = [
+          ...(serverCourt.teamA || []),
+          ...(serverCourt.teamB || []),
+        ];
+        const uniqueMemberIds = Array.from(
+          new Set(allCourtMembers.map((member) => member.id))
+        );
+        const memberRefs = uniqueMemberIds.map((memberId) =>
+          getMemberDocRef(currentCircle.circleId, memberId)
+        );
+        const memberSnaps = await Promise.all(
+          memberRefs.map((memberRef) => transaction.get(memberRef))
+        );
 
-        const nextPlayCounts = { ...(group.playCounts || {}) };
+        const latestMemberMap = new Map();
+        memberSnaps.forEach((memberSnap, memberIndex) => {
+          const memberId = uniqueMemberIds[memberIndex];
+          if (!memberSnap.exists()) {
+            throw new Error(`メンバー ${memberId} が見つかりません`);
+          }
+          latestMemberMap.set(memberId, {
+            id: memberId,
+            ...memberSnap.data(),
+          });
+        });
 
-        [...targetCourt.teamA, ...targetCourt.teamB].forEach((member) => {
-          nextPlayCounts[member.id] = (nextPlayCounts[member.id] || 0) + 1;
+        const withLatestRate = (member) => {
+          const latest = latestMemberMap.get(member.id);
+          return latest ? { ...member, ...latest } : member;
+        };
+
+        // 勝者選択は確定ボタンを押すまでローカル表示のみなので、
+        // serverCourt.winner ではなく、この端末で選択した勝者をtransactionへ渡す。
+        const confirmedWinner = targetCourt.winner;
+        const serverWinnerTeam =
+          confirmedWinner === "A"
+            ? serverCourt.teamA.map(withLatestRate)
+            : serverCourt.teamB.map(withLatestRate);
+        const serverLoserTeam =
+          confirmedWinner === "A"
+            ? serverCourt.teamB.map(withLatestRate)
+            : serverCourt.teamA.map(withLatestRate);
+
+        const rateMove = calculateRateMove(serverWinnerTeam, serverLoserTeam);
+        const winnerIds = new Set(serverWinnerTeam.map((member) => member.id));
+        const loserIds = new Set(serverLoserTeam.map((member) => member.id));
+        const beforeRates = {};
+        const afterRates = {};
+
+        uniqueMemberIds.forEach((memberId) => {
+          const member = latestMemberMap.get(memberId);
+          const beforeRate = getMemberRate(member);
+          beforeRates[memberId] = beforeRate;
+          afterRates[memberId] = winnerIds.has(memberId)
+            ? beforeRate + rateMove
+            : beforeRate - rateMove;
+        });
+
+        const updateRateFromTransaction = (member) => {
+          if (!Object.prototype.hasOwnProperty.call(afterRates, member.id)) {
+            return member;
+          }
+          return {
+            ...member,
+            rate: afterRates[member.id],
+          };
+        };
+
+        const nextServerGroups = serverGroups.map((group) => {
+          const updatedWaitingMembers = (group.waitingMembers || []).map(
+            updateRateFromTransaction
+          );
+          const updatedCourts = (group.courts || []).map((court, courtIndex) => {
+            if (!court) return court;
+
+            if (group.id === activeGroupId && courtIndex === index) {
+              return null;
+            }
+
+            return {
+              ...court,
+              teamA: (court.teamA || []).map(updateRateFromTransaction),
+              teamB: (court.teamB || []).map(updateRateFromTransaction),
+            };
+          });
+
+          if (group.id !== activeGroupId) {
+            return {
+              ...group,
+              waitingMembers: updatedWaitingMembers,
+              courts: updatedCourts,
+            };
+          }
+
+          const returnedCourtMembers = allCourtMembers.map((member) => {
+            const latest = withLatestRate(member);
+            return updateRateFromTransaction(latest);
+          });
+          const nextPlayCounts = { ...(group.playCounts || {}) };
+
+          allCourtMembers.forEach((member) => {
+            nextPlayCounts[member.id] = (nextPlayCounts[member.id] || 0) + 1;
+          });
+
+          return {
+            ...group,
+            waitingMembers: [...updatedWaitingMembers, ...returnedCourtMembers],
+            courts: updatedCourts,
+            playCounts: nextPlayCounts,
+            selectedSwap: null,
+          };
+        });
+
+        const remoteRevision = getSyncRevision(serverData);
+        const nextRevision = remoteRevision + 1;
+        const operationId = `${syncClientIdRef.current}-${confirmedAtMillis}-${Math.random()
+          .toString(36)
+          .slice(2)}`;
+
+        // すべての読み込みが終わった後に、レート・試合終了・履歴を同じtransactionで書く。
+        memberRefs.forEach((memberRef, memberIndex) => {
+          const memberId = uniqueMemberIds[memberIndex];
+          transaction.set(
+            memberRef,
+            {
+              rate: afterRates[memberId],
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          );
+        });
+
+        const historyChanges = uniqueMemberIds.map((memberId) => {
+          const member = latestMemberMap.get(memberId);
+          return {
+            memberId,
+            nickname: member.nickname || member.name || "",
+            beforeRate: beforeRates[memberId],
+            afterRate: afterRates[memberId],
+            change: afterRates[memberId] - beforeRates[memberId],
+            result: winnerIds.has(memberId) ? "win" : "lose",
+          };
+        });
+
+        transaction.set(historyRef, {
+          gameId: localGameId,
+          groupId: activeGroupId,
+          groupName: serverGroup.groupName || "",
+          courtNumber: index + 1,
+          winner: confirmedWinner,
+          rateMove,
+          memberChanges: historyChanges,
+          confirmedDevice: deviceTypeRef.current,
+          confirmedBy: syncClientIdRef.current,
+          confirmedAtMillis,
+          confirmedAt: serverTimestamp(),
+          practiceDate: serverData.practiceDate || getPracticeDateKey(),
+        });
+
+        transaction.set(syncRef, {
+          ...serverData,
+          groups: nextServerGroups,
+          revision: nextRevision,
+          baseRevision: remoteRevision,
+          schemaVersion: Math.max(Number(serverData.schemaVersion || 2), 3),
+          operationId,
+          updatedAtMillis: confirmedAtMillis,
+          updatedBy: syncClientIdRef.current,
+          updatedDevice: deviceTypeRef.current,
+          updatedAt: serverTimestamp(),
         });
 
         return {
-          ...group,
-          waitingMembers: [...updatedWaitingMembers, ...updatedCourtMembers],
-          courts: updatedCourts,
-          playCounts: nextPlayCounts,
-          selectedSwap: null,
+          status: "saved",
+          nextGroups: nextServerGroups,
+          nextRevision,
+          afterRates,
+          rateMove,
         };
       });
 
-      setGroups(nextGroups);
-
-      const saved = await saveGroupsToFirestore(nextGroups, activeGroupId, {
-        successMessage: "試合結果を確定・同期しました",
-      });
-
-      if (!saved) {
+      if (result.status === "duplicate") {
+        if (result.remoteData) {
+          applyRemoteSyncData(result.remoteData, {
+            message: "この試合はすでに確定済みです。最新状態を反映しました",
+            allowPracticePrompt: userMode !== "viewer",
+          });
+        }
         await refreshMembersFromServer(currentCircle.circleId);
-        setSyncMessage(
-          "確定処理が他端末の更新と重なりました。最新状態を反映したので内容を確認してください"
-        );
+        return;
       }
+
+      if (result.status === "stale") {
+        if (result.remoteData) {
+          applyRemoteSyncData(result.remoteData, {
+            message:
+              "別端末で試合状態が更新されていたため、古い確定処理は中止しました",
+            allowPracticePrompt: userMode !== "viewer",
+          });
+        }
+        await refreshMembersFromServer(currentCircle.circleId);
+        return;
+      }
+
+      setGroups(result.nextGroups);
+      setMembers((prevMembers) =>
+        prevMembers.map((member) =>
+          Object.prototype.hasOwnProperty.call(result.afterRates, member.id)
+            ? { ...member, rate: result.afterRates[member.id] }
+            : member
+        )
+      );
+      latestSyncVersionRef.current = result.nextRevision;
+      syncInitializedRef.current = true;
+      setLastSyncTime(formatSyncTime());
+      setLastOperationDevice(deviceTypeRef.current);
+      setLastOperationTime(formatOperationTime(confirmedAtMillis));
+      setSyncMessage(
+        `試合結果を確定しました（レート変動 ±${result.rateMove}）`
+      );
+      setAutoSyncStatus("自動同期中");
     } catch (error) {
-      alert("レートの保存に失敗しました");
+      console.error("試合確定transaction失敗", error);
+      setSyncMessage(
+        "確定に失敗しました。通信とFirestoreルールを確認して、もう一度確定してください"
+      );
     } finally {
       setConfirmingCourts((prev) => {
         const next = { ...prev };
         delete next[index];
         return next;
       });
+
+      pendingSaveCountRef.current = Math.max(
+        0,
+        pendingSaveCountRef.current - 1
+      );
+      if (pendingSaveCountRef.current === 0) {
+        setIsSyncSaving(false);
+        applyPendingRemoteSyncIfNeeded();
+      }
     }
   };
 
@@ -3214,7 +3563,7 @@ export default function App() {
       id: Date.now().toString(),
       nickname: viewerMemberForm.nickname.trim(),
       name: viewerMemberForm.nickname.trim(),
-      reading: viewerMemberForm.reading.trim(),
+      reading: normalizeReadingInput(viewerMemberForm.reading.trim()),
       gender: viewerMemberForm.gender,
       rank: viewerMemberForm.rank,
       rate: getInitialRate(viewerMemberForm.rank),
@@ -4054,8 +4403,10 @@ export default function App() {
           ニックネーム
           <input
             value={form.nickname}
-            onChange={(e) => setForm({ ...form, nickname: e.target.value })}
-            placeholder="例：たなか"
+            onChange={(e) =>
+              updateFormNicknameWithAutoReading(form, setForm, e.target.value)
+            }
+            placeholder="例：田中 / タナカ / たなか"
           />
         </label>
         {formError && !form.nickname.trim() && (
@@ -4066,10 +4417,17 @@ export default function App() {
           読み方
           <input
             value={form.reading}
-            onChange={(e) => setForm({ ...form, reading: e.target.value })}
-            placeholder="例：たなか"
+            onChange={(e) =>
+              setForm({
+                ...form,
+                reading: normalizeReadingInput(e.target.value),
+              })
+            }
+            placeholder="ニックネームから自動入力されます"
           />
-          <span className="inputNoteRed">必ずひらがなで入力してください</span>
+          <span className="readingAutoNote">
+            カタカナは自動でひらがなに変換します。漢字は一般的な名字のみ候補を自動入力するため、必ず読み方を確認してください。
+          </span>
         </label>
         {formError && !form.reading.trim() && (
           <p className="errorText">入力してください</p>
@@ -4118,8 +4476,13 @@ export default function App() {
           </div>
         )}
 
-        <div className="bottomActions">
-          <button onClick={onSave}>{isEdit ? "決定" : "登録"}</button>
+        <div className={isEdit ? "bottomActions" : "registrationFormActions"}>
+          <button
+            className={isEdit ? "" : "primaryRegisterButton registerPulseButton"}
+            onClick={onSave}
+          >
+            {isEdit ? "決定" : "この内容で登録"}
+          </button>
           <button className="subButton" onClick={onClose}>
             {isEdit ? "もどる" : "閉じる"}
           </button>
@@ -4904,6 +5267,16 @@ export default function App() {
                       </button>
 
                       <button
+                        className="rateHistoryMenuButton"
+                        onClick={() => {
+                          setAdminPanel("rateHistory");
+                          loadRateHistory();
+                        }}
+                      >
+                        レート変更履歴
+                      </button>
+
+                      <button
                         className="resetRateButton"
                         onClick={resetAllRates}
                       >
@@ -5246,6 +5619,77 @@ export default function App() {
                   </>
                 )}
 
+                {adminPanel === "rateHistory" && (
+                  <>
+                    <h3>レート変更履歴</h3>
+                    <p className="adminSmallNote">
+                      直近50試合の確定履歴です。同じ試合IDは1回だけレートへ反映されます。
+                    </p>
+
+                    <button
+                      className="rateHistoryReloadButton"
+                      onClick={loadRateHistory}
+                      disabled={rateHistoryLoading}
+                    >
+                      {rateHistoryLoading ? "読み込み中…" : "履歴を再読み込み"}
+                    </button>
+
+                    {rateHistoryError && (
+                      <p className="errorText centerText">{rateHistoryError}</p>
+                    )}
+
+                    <div className="rateHistoryList">
+                      {rateHistoryItems.map((item) => (
+                        <div key={item.id} className="rateHistoryCard">
+                          <div className="rateHistoryHeader">
+                            <strong>{item.groupName || "グループ"}</strong>
+                            <span>コート{item.courtNumber || "-"}</span>
+                          </div>
+                          <div className="rateHistoryMeta">
+                            {item.confirmedAtMillis
+                              ? new Date(item.confirmedAtMillis).toLocaleString("ja-JP")
+                              : "日時不明"}
+                            {item.confirmedDevice
+                              ? ` / ${item.confirmedDevice}`
+                              : ""}
+                          </div>
+                          <div className="rateHistoryGameId">
+                            試合ID：{item.gameId || item.id}
+                          </div>
+                          <div className="rateHistoryChanges">
+                            {(item.memberChanges || []).map((change) => (
+                              <div
+                                key={`${item.id}-${change.memberId}`}
+                                className="rateHistoryChangeRow"
+                              >
+                                <span>{change.nickname || change.memberId}</span>
+                                <span>
+                                  {change.beforeRate} → {change.afterRate}
+                                  {change.change >= 0 ? " +" : " "}
+                                  {change.change}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+
+                      {!rateHistoryLoading && rateHistoryItems.length === 0 && !rateHistoryError && (
+                        <p className="adminSmallNote">まだ確定履歴はありません。</p>
+                      )}
+                    </div>
+
+                    <div className="bottomActions">
+                      <button
+                        className="subButton"
+                        onClick={() => setAdminPanel("menu")}
+                      >
+                        戻る
+                      </button>
+                    </div>
+                  </>
+                )}
+
 {adminPanel === "member" && (
                   <>
                     <h3>メンバー編集・削除・レート変更</h3>
@@ -5299,10 +5743,11 @@ export default function App() {
               <input
                 value={adminMemberEditForm.nickname}
                 onChange={(e) =>
-                  setAdminMemberEditForm({
-                    ...adminMemberEditForm,
-                    nickname: e.target.value,
-                  })
+                  updateFormNicknameWithAutoReading(
+                    adminMemberEditForm,
+                    setAdminMemberEditForm,
+                    e.target.value
+                  )
                 }
               />
             </label>
@@ -5314,11 +5759,13 @@ export default function App() {
                 onChange={(e) =>
                   setAdminMemberEditForm({
                     ...adminMemberEditForm,
-                    reading: e.target.value,
+                    reading: normalizeReadingInput(e.target.value),
                   })
                 }
               />
-              <span className="inputNoteRed">必ずひらがなで入力してください</span>
+              <span className="readingAutoNote">
+                カタカナはひらがなへ自動変換します。漢字は読み方欄には入力できません。
+              </span>
             </label>
 
             <div className="formBlock">
@@ -5459,12 +5906,14 @@ export default function App() {
 
             <div className="participationActions">
               <button
+                className="newMemberOpenButton"
                 onClick={() => {
                   setIsNewMemberFormOpen(!isNewMemberFormOpen);
                   setIsEditSelectMode(false);
+                  setRegistrationSuccessMessage("");
                 }}
               >
-                新規登録
+                ＋ 新規メンバー登録
               </button>
 
               <button
@@ -5490,6 +5939,12 @@ export default function App() {
                 別アカウントから持ってくる
               </button>
             </div>
+
+            {registrationSuccessMessage && (
+              <p className="registrationSuccessMessage">
+                {registrationSuccessMessage}
+              </p>
+            )}
 
             {isEditSelectMode && (
               <p className="editSelectGuide">編集するメンバーを選んでください</p>
@@ -5577,8 +6032,14 @@ export default function App() {
               </>
             )}
 
-            <div className="bottomActions">
-              <button onClick={decideParticipation}>決定</button>
+            <div className="bottomActions participationStickyActions">
+              <button
+                className="participationDecisionButton"
+                onClick={decideParticipation}
+                disabled={memberLoading}
+              >
+                決定
+              </button>
               <button className="subButton" onClick={closeParticipationModal}>
                 もどる
               </button>

@@ -1752,3 +1752,184 @@ div.authModeButton {
   font-weight: bold;
   line-height: 1.5;
 }
+
+
+/* 完成11追加：読み方自動入力1 */
+.readingAutoNote {
+  display: block;
+  margin-top: 5px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: bold;
+  line-height: 1.55;
+}
+
+/* 完成11追加：新規登録ボタン強調1 */
+.newMemberOpenButton {
+  background: #16a34a;
+  color: white;
+  border: 2px solid #15803d;
+  padding: 13px 16px;
+  border-radius: 14px;
+  font-size: 16px;
+  font-weight: 900;
+  box-shadow: 0 4px 0 #166534;
+}
+
+.newMemberOpenButton:active {
+  transform: translateY(2px);
+  box-shadow: 0 2px 0 #166534;
+}
+
+.registrationFormActions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 9px;
+  margin-top: 18px;
+}
+
+.primaryRegisterButton {
+  width: 100%;
+  min-height: 54px;
+  background: #15803d;
+  color: white;
+  border: 2px solid #166534;
+  border-radius: 14px;
+  font-size: 17px;
+  font-weight: 900;
+  box-shadow: 0 6px 0 #14532d, 0 10px 18px rgba(20, 83, 45, 0.18);
+}
+
+/* 登録ボタン強調アニメーション1：ゆっくり浮き沈みし、押すと沈む */
+.registerPulseButton {
+  animation: registerFloat 1.8s ease-in-out infinite;
+}
+
+.registerPulseButton:active {
+  animation: none;
+  transform: translateY(5px);
+  box-shadow: 0 1px 0 #14532d, 0 3px 8px rgba(20, 83, 45, 0.16);
+}
+
+@keyframes registerFloat {
+  0%, 100% {
+    transform: translateY(0);
+    box-shadow: 0 6px 0 #14532d, 0 10px 18px rgba(20, 83, 45, 0.18);
+  }
+  50% {
+    transform: translateY(-3px);
+    box-shadow: 0 9px 0 #14532d, 0 14px 22px rgba(20, 83, 45, 0.22);
+  }
+}
+
+.registrationSuccessMessage {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #dcfce7;
+  border: 1px solid #86efac;
+  color: #166534;
+  font-size: 14px;
+  font-weight: 900;
+  text-align: center;
+}
+
+/* 完成11追加：参加画面下部固定1 */
+.participationStickyActions {
+  position: sticky;
+  bottom: -16px;
+  z-index: 20;
+  margin: 18px -16px -16px;
+  padding: 12px 16px max(12px, env(safe-area-inset-bottom));
+  background: rgba(255, 255, 255, 0.97);
+  border-top: 1px solid #d1d5db;
+  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(6px);
+}
+
+.participationDecisionButton {
+  background: #1e3a8a;
+  color: white;
+  font-size: 16px;
+  min-height: 48px;
+}
+
+/* 完成11追加：レート変更履歴1 */
+.rateHistoryMenuButton {
+  background: #7c3aed;
+  color: white;
+}
+
+.rateHistoryReloadButton {
+  width: 100%;
+  margin: 8px 0 12px;
+  background: #ede9fe;
+  color: #5b21b6;
+  border: 1px solid #c4b5fd;
+}
+
+.rateHistoryList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.rateHistoryCard {
+  background: #fafafa;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 11px;
+}
+
+.rateHistoryHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #111827;
+}
+
+.rateHistoryMeta,
+.rateHistoryGameId {
+  margin-top: 4px;
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: bold;
+  word-break: break-all;
+}
+
+.rateHistoryChanges {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 9px;
+}
+
+.rateHistoryChangeRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 7px;
+  border-radius: 8px;
+  background: white;
+  color: #374151;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .registerPulseButton {
+    animation: none;
+  }
+}
+
+
+/* 完成11追加：新規登録ボタンを参加画面で一段目に目立たせる */
+.participationActions {
+  flex-wrap: wrap;
+}
+
+.participationActions .newMemberOpenButton {
+  flex: 1 1 100%;
+}

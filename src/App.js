@@ -721,6 +721,22 @@ function getStableCourtGameId(groupId, courtIndex, court) {
   return `legacy-${hashText(legacySeed)}`;
 }
 
+const PROCESSING_GUIDE_MESSAGES = [
+  "参加中や休憩中のメンバーをタップすると、メンバー同士を入れ替えられます。",
+  "「コート入れ替え」を押すと、試合ごと別のコートへ移動できます。",
+  "試合中の「組みなおし」を押すと、そのコートの組み合わせを作り直せます。",
+  "勝ったペアの「勝ち」を押して「確定」すると、試合結果とレートが反映されます。",
+  "「参加回数変更」から、メンバーごとの参加回数を調整できます。",
+];
+
+function clonePlainData(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function getCourtUndoKey(groupId, courtIndex) {
+  return `${groupId || "none"}:${courtIndex}`;
+}
+
 function formatOperationTime(value) {
   if (!value) return "";
 
@@ -825,6 +841,10 @@ export default function App() {
   const [rateHistoryLoading, setRateHistoryLoading] = useState(false);
   const [rateHistoryError, setRateHistoryError] = useState("");
   const [registrationSuccessMessage, setRegistrationSuccessMessage] = useState("");
+  const [courtUndoStates, setCourtUndoStates] = useState({});
+  const [processingTipIndex, setProcessingTipIndex] = useState(0);
+  const [undoingCourtKey, setUndoingCourtKey] = useState("");
+
 
   const [isAdminSettingsOpen, setIsAdminSettingsOpen] = useState(false);
   const [adminPasswordInput, setAdminPasswordInput] = useState("");
@@ -882,6 +902,26 @@ export default function App() {
   const isViewerMode = userMode === "viewer";
   const isReadingVisible = currentCircle?.defaultReadingDisplay === "あり";
   const viewerUrl = currentCircle ? buildViewerUrl(currentCircle.circleId) : "";
+  const hasConfirmingCourt = Object.values(confirmingCourts).some(Boolean);
+  const currentProcessingGuide =
+    PROCESSING_GUIDE_MESSAGES[
+      processingTipIndex % PROCESSING_GUIDE_MESSAGES.length
+    ];
+
+  useEffect(() => {
+    if (!hasConfirmingCourt) {
+      setProcessingTipIndex(0);
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      setProcessingTipIndex(
+        (prev) => (prev + 1) % PROCESSING_GUIDE_MESSAGES.length
+      );
+    }, 2200);
+
+    return () => window.clearInterval(timer);
+  }, [hasConfirmingCourt]);
 
   useEffect(() => {
     if (!currentCircle?.circleId) return;
@@ -951,6 +991,9 @@ export default function App() {
     setIsCourtSwapMode(false);
     setSelectedCourtSwapIndex(null);
     setConfirmingCourts({});
+    setCourtUndoStates({});
+    setUndoingCourtKey("");
+    setProcessingTipIndex(0);
   }, [currentCircle?.circleId]);
 
   useEffect(() => {
@@ -1222,6 +1265,9 @@ export default function App() {
     latestSyncVersionRef.current = incomingRevision;
     syncInitializedRef.current = true;
 
+    // 他端末・手動同期で新しい状態を受信したら、端末内の「1手戻す」は安全のため破棄します。
+    setCourtUndoStates({});
+    setUndoingCourtKey("");
     setGroups(loadedGroups);
 
     // グループ独立化1：activeGroupId は端末ごとの表示状態。
@@ -1950,6 +1996,10 @@ export default function App() {
     return doc(db, "circles", circleId, "gameResults", gameId);
   };
 
+  const getGameResultUndoDocRef = (circleId, gameId) => {
+    return doc(db, "circles", circleId, "gameResultUndos", gameId);
+  };
+
   const loadRateHistory = async () => {
     if (!currentCircle?.circleId) return;
 
@@ -1963,9 +2013,28 @@ export default function App() {
         currentCircle.circleId,
         "gameResults"
       );
-      const snapshot = await getDocsFromServer(historyRef);
+      const undoHistoryRef = collection(
+        db,
+        "circles",
+        currentCircle.circleId,
+        "gameResultUndos"
+      );
+
+      const [snapshot, undoSnapshot] = await Promise.all([
+        getDocsFromServer(historyRef),
+        getDocsFromServer(undoHistoryRef),
+      ]);
+
+      const undoneGameIds = new Set(
+        undoSnapshot.docs.map((itemDoc) => itemDoc.id)
+      );
+
       const items = snapshot.docs
-        .map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() }))
+        .map((itemDoc) => ({
+          id: itemDoc.id,
+          ...itemDoc.data(),
+          undone: undoneGameIds.has(itemDoc.id),
+        }))
         .sort(
           (a, b) =>
             Number(b.confirmedAtMillis || 0) - Number(a.confirmedAtMillis || 0)
@@ -3107,6 +3176,12 @@ export default function App() {
   };
 
   const generateCourt = async (index) => {
+    if (!activeGroup || isSyncSaving) return;
+
+    const undoKey = getCourtUndoKey(activeGroupId, index);
+    const beforeGroupSnapshot = clonePlainData(activeGroup);
+    const wasRebuild = Boolean(courts[index]);
+
     let availableMembers = [...waitingMembers];
 
     if (courts[index]) {
@@ -3179,8 +3254,27 @@ export default function App() {
 
     setGroups(nextGroups);
 
-    await saveGroupsToFirestore(nextGroups, activeGroupId);
+    const saved = await saveGroupsToFirestore(nextGroups, activeGroupId, {
+      successMessage: wasRebuild
+        ? `コート${getCircledNumber(index + 1)}を組みなおしました`
+        : `コート${getCircledNumber(index + 1)}に新しい組み合わせを作成しました`,
+    });
+
+    if (saved) {
+      setCourtUndoStates((prev) => ({
+        ...prev,
+        [undoKey]: {
+          type: "generate",
+          groupId: activeGroupId,
+          courtIndex: index,
+          revision: latestSyncVersionRef.current,
+          beforeGroup: beforeGroupSnapshot,
+          label: wasRebuild ? "組みなおし" : "新規",
+        },
+      }));
+    }
   };
+
 
   const clearCourt = async (index) => {
     if (!courts[index]) return;
@@ -3459,6 +3553,10 @@ export default function App() {
           nextRevision,
           afterRates,
           rateMove,
+          memberChanges: historyChanges,
+          originalCourt: clonePlainData(serverCourt),
+          confirmedGameId: localGameId,
+          confirmedWinner,
         };
       });
 
@@ -3501,6 +3599,23 @@ export default function App() {
       setSyncMessage(
         `試合結果を確定しました（レート変動 ±${result.rateMove}）`
       );
+
+      const undoKey = getCourtUndoKey(activeGroupId, index);
+      setCourtUndoStates((prev) => ({
+        ...prev,
+        [undoKey]: {
+          type: "confirm",
+          groupId: activeGroupId,
+          courtIndex: index,
+          revision: result.nextRevision,
+          originalCourt: result.originalCourt,
+          confirmedGameId: result.confirmedGameId,
+          memberChanges: result.memberChanges,
+          confirmedWinner: result.confirmedWinner,
+          label: "確定",
+        },
+      }));
+
       setAutoSyncStatus("自動同期中");
     } catch (error) {
       console.error("試合確定transaction失敗", error);
@@ -3518,6 +3633,385 @@ export default function App() {
         0,
         pendingSaveCountRef.current - 1
       );
+      if (pendingSaveCountRef.current === 0) {
+        setIsSyncSaving(false);
+        applyPendingRemoteSyncIfNeeded();
+      }
+    }
+  };
+
+  const undoCourtAction = async (index) => {
+    if (!currentCircle || !activeGroup || isSyncSaving) return;
+
+    const undoKey = getCourtUndoKey(activeGroupId, index);
+    const undoState = courtUndoStates[undoKey];
+
+    if (!undoState) return;
+
+    if (undoState.revision !== latestSyncVersionRef.current) {
+      setCourtUndoStates((prev) => {
+        const next = { ...prev };
+        delete next[undoKey];
+        return next;
+      });
+      setSyncMessage(
+        "この操作のあとに別の更新が入ったため、安全のため「ひとつ戻す」は実行できません"
+      );
+      return;
+    }
+
+    const ok = window.confirm(
+      `${undoState.label || "直前の操作"}を取り消して、ひとつ前の状態に戻しますか？`
+    );
+
+    if (!ok) return;
+
+    setUndoingCourtKey(undoKey);
+
+    if (undoState.type === "generate") {
+      try {
+        const restoredGroup = clonePlainData(undoState.beforeGroup);
+        const nextGroups = groups.map((group) =>
+          group.id === activeGroupId ? restoredGroup : group
+        );
+
+        setGroups(nextGroups);
+
+        const saved = await saveGroupsToFirestore(nextGroups, activeGroupId, {
+          successMessage: `${undoState.label || "直前の操作"}を取り消しました`,
+        });
+
+        if (saved) {
+          setCourtUndoStates((prev) => {
+            const next = { ...prev };
+            delete next[undoKey];
+            return next;
+          });
+        }
+      } finally {
+        setUndoingCourtKey("");
+      }
+      return;
+    }
+
+    if (undoState.type !== "confirm" || !undoState.confirmedGameId) {
+      setUndoingCourtKey("");
+      return;
+    }
+
+    pendingSaveCountRef.current += 1;
+    setIsSyncSaving(true);
+    setAutoSyncStatus("確定を取り消し中");
+
+    const undoAtMillis = Date.now();
+    const restoredGameId = createCourtGameId(activeGroupId, index);
+
+    try {
+      const syncRef = getSyncDocRef(currentCircle.circleId);
+      const historyRef = getGameResultDocRef(
+        currentCircle.circleId,
+        undoState.confirmedGameId
+      );
+      const undoHistoryRef = getGameResultUndoDocRef(
+        currentCircle.circleId,
+        undoState.confirmedGameId
+      );
+
+      const result = await runTransaction(db, async (transaction) => {
+        const syncSnap = await transaction.get(syncRef);
+        const historySnap = await transaction.get(historyRef);
+        const undoHistorySnap = await transaction.get(undoHistoryRef);
+
+        if (!syncSnap.exists()) {
+          throw new Error("同期データが見つかりません");
+        }
+
+        const serverData = syncSnap.data();
+        const remoteRevision = getSyncRevision(serverData);
+
+        if (remoteRevision !== undoState.revision) {
+          return {
+            status: "stale",
+            remoteData: serverData,
+          };
+        }
+
+        if (!historySnap.exists()) {
+          return {
+            status: "history-missing",
+            remoteData: serverData,
+          };
+        }
+
+        if (undoHistorySnap.exists()) {
+          return {
+            status: "already-undone",
+            remoteData: serverData,
+          };
+        }
+
+        const historyData = historySnap.data();
+        const memberChanges = Array.isArray(historyData.memberChanges)
+          ? historyData.memberChanges
+          : [];
+        const memberIds = memberChanges.map((change) => change.memberId);
+        const memberIdSet = new Set(memberIds);
+
+        const serverGroups = Array.isArray(serverData.groups)
+          ? serverData.groups
+          : [];
+        const serverGroup = serverGroups.find(
+          (group) => group.id === activeGroupId
+        );
+
+        if (!serverGroup) {
+          return {
+            status: "stale",
+            remoteData: serverData,
+          };
+        }
+
+        if (serverGroup.courts?.[index]) {
+          return {
+            status: "unsafe",
+            remoteData: serverData,
+          };
+        }
+
+        const waitingIdSet = new Set(
+          (serverGroup.waitingMembers || []).map((member) => member.id)
+        );
+
+        const allMembersAreWaiting = memberIds.every((memberId) =>
+          waitingIdSet.has(memberId)
+        );
+
+        const memberIsOnAnotherCourt = (serverGroup.courts || []).some(
+          (court, courtIndex) => {
+            if (!court || courtIndex === index) return false;
+            return [...(court.teamA || []), ...(court.teamB || [])].some(
+              (member) => memberIdSet.has(member.id)
+            );
+          }
+        );
+
+        if (!allMembersAreWaiting || memberIsOnAnotherCourt) {
+          return {
+            status: "unsafe",
+            remoteData: serverData,
+          };
+        }
+
+        const memberRefs = memberIds.map((memberId) =>
+          getMemberDocRef(currentCircle.circleId, memberId)
+        );
+        const memberSnaps = await Promise.all(
+          memberRefs.map((memberRef) => transaction.get(memberRef))
+        );
+
+        const currentMemberMap = new Map();
+        const reversedRates = {};
+
+        memberSnaps.forEach((memberSnap, memberIndex) => {
+          const memberId = memberIds[memberIndex];
+
+          if (!memberSnap.exists()) {
+            throw new Error(`メンバー ${memberId} が見つかりません`);
+          }
+
+          const currentMember = {
+            id: memberId,
+            ...memberSnap.data(),
+          };
+          const change = Number(memberChanges[memberIndex]?.change || 0);
+          const currentRate = getMemberRate(currentMember);
+
+          currentMemberMap.set(memberId, currentMember);
+          reversedRates[memberId] = currentRate - change;
+        });
+
+        const updateRateForUndo = (member) => {
+          if (!Object.prototype.hasOwnProperty.call(reversedRates, member.id)) {
+            return member;
+          }
+
+          return {
+            ...member,
+            rate: reversedRates[member.id],
+          };
+        };
+
+        const restoreMember = (member) => {
+          const currentMember = currentMemberMap.get(member.id);
+
+          return updateRateForUndo({
+            ...member,
+            ...(currentMember || {}),
+          });
+        };
+
+        const originalCourt = clonePlainData(undoState.originalCourt);
+        const restoredCourt = {
+          ...originalCourt,
+          teamA: (originalCourt?.teamA || []).map(restoreMember),
+          teamB: (originalCourt?.teamB || []).map(restoreMember),
+          winner:
+            undoState.confirmedWinner ||
+            originalCourt?.winner ||
+            historyData.winner ||
+            null,
+          gameId: restoredGameId,
+          createdAtMillis: undoAtMillis,
+        };
+
+        const nextServerGroups = serverGroups.map((group) => {
+          const updatedWaitingMembers = (group.waitingMembers || []).map(
+            updateRateForUndo
+          );
+          const updatedCourts = (group.courts || []).map((court) => {
+            if (!court) return court;
+
+            return {
+              ...court,
+              teamA: (court.teamA || []).map(updateRateForUndo),
+              teamB: (court.teamB || []).map(updateRateForUndo),
+            };
+          });
+
+          if (group.id !== activeGroupId) {
+            return {
+              ...group,
+              waitingMembers: updatedWaitingMembers,
+              courts: updatedCourts,
+            };
+          }
+
+          const nextPlayCounts = { ...(group.playCounts || {}) };
+          memberIds.forEach((memberId) => {
+            nextPlayCounts[memberId] = Math.max(
+              0,
+              Number(nextPlayCounts[memberId] || 0) - 1
+            );
+          });
+
+          const nextCourts = [...updatedCourts];
+          nextCourts[index] = restoredCourt;
+
+          return {
+            ...group,
+            waitingMembers: updatedWaitingMembers.filter(
+              (member) => !memberIdSet.has(member.id)
+            ),
+            courts: nextCourts,
+            playCounts: nextPlayCounts,
+            selectedSwap: null,
+          };
+        });
+
+        const nextRevision = remoteRevision + 1;
+        const operationId = `${syncClientIdRef.current}-${undoAtMillis}-${Math.random()
+          .toString(36)
+          .slice(2)}`;
+
+        memberRefs.forEach((memberRef, memberIndex) => {
+          const memberId = memberIds[memberIndex];
+          transaction.set(
+            memberRef,
+            {
+              rate: reversedRates[memberId],
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          );
+        });
+
+        transaction.set(undoHistoryRef, {
+          gameId: undoState.confirmedGameId,
+          restoredGameId,
+          groupId: activeGroupId,
+          groupName: serverGroup.groupName || "",
+          courtNumber: index + 1,
+          undoneDevice: deviceTypeRef.current,
+          undoneBy: syncClientIdRef.current,
+          undoneAtMillis: undoAtMillis,
+          undoneAt: serverTimestamp(),
+          memberChanges: memberChanges.map((change) => ({
+            ...change,
+            undoChange: -Number(change.change || 0),
+          })),
+        });
+
+        transaction.set(syncRef, {
+          ...serverData,
+          groups: nextServerGroups,
+          revision: nextRevision,
+          baseRevision: remoteRevision,
+          schemaVersion: Math.max(Number(serverData.schemaVersion || 3), 4),
+          operationId,
+          updatedAtMillis: undoAtMillis,
+          updatedBy: syncClientIdRef.current,
+          updatedDevice: deviceTypeRef.current,
+          updatedAt: serverTimestamp(),
+        });
+
+        return {
+          status: "saved",
+          nextGroups: nextServerGroups,
+          nextRevision,
+          reversedRates,
+        };
+      });
+
+      if (result.status !== "saved") {
+        if (result.remoteData) {
+          applyRemoteSyncData(result.remoteData, {
+            message:
+              result.status === "unsafe"
+                ? "その後に別の組み合わせ操作が行われているため、安全のため確定を戻せません"
+                : result.status === "already-undone"
+                ? "この確定はすでに取り消されています。最新状態を反映しました"
+                : "状態が更新されているため、確定の取り消しを中止して最新状態を反映しました",
+            allowPracticePrompt: userMode !== "viewer",
+          });
+        }
+        return;
+      }
+
+      setGroups(result.nextGroups);
+      setMembers((prevMembers) =>
+        prevMembers.map((member) =>
+          Object.prototype.hasOwnProperty.call(result.reversedRates, member.id)
+            ? { ...member, rate: result.reversedRates[member.id] }
+            : member
+        )
+      );
+      latestSyncVersionRef.current = result.nextRevision;
+      syncInitializedRef.current = true;
+      setLastSyncTime(formatSyncTime());
+      setLastOperationDevice(deviceTypeRef.current);
+      setLastOperationTime(formatOperationTime(undoAtMillis));
+      setSyncMessage(
+        `コート${getCircledNumber(index + 1)}の確定を取り消し、試合前の状態へ戻しました`
+      );
+      setAutoSyncStatus("自動同期中");
+
+      setCourtUndoStates((prev) => {
+        const next = { ...prev };
+        delete next[undoKey];
+        return next;
+      });
+    } catch (error) {
+      console.error("確定取り消しtransaction失敗", error);
+      setSyncMessage(
+        "確定の取り消しに失敗しました。通信とFirestoreルールを確認してください"
+      );
+    } finally {
+      setUndoingCourtKey("");
+      pendingSaveCountRef.current = Math.max(
+        0,
+        pendingSaveCountRef.current - 1
+      );
+
       if (pendingSaveCountRef.current === 0) {
         setIsSyncSaving(false);
         applyPendingRemoteSyncIfNeeded();
@@ -4274,6 +4768,12 @@ export default function App() {
     const court = courts[index];
     const isConfirming = Boolean(confirmingCourts[index]);
     const isSelectedForCourtSwap = selectedCourtSwapIndex === index;
+    const undoKey = getCourtUndoKey(activeGroupId, index);
+    const courtUndoState = courtUndoStates[undoKey];
+    const canUndoCourtAction =
+      Boolean(courtUndoState) &&
+      courtUndoState.revision === latestSyncVersionRef.current;
+    const isUndoingThisCourt = undoingCourtKey === undoKey;
 
     return (
       <div
@@ -4371,7 +4871,7 @@ export default function App() {
                 onClick={() => generateCourt(index)}
                 disabled={isConfirming || isSyncSaving || isCourtSwapMode}
               >
-                新規
+                {court ? "組みなおし" : "新規"}
               </button>
             )}
             <button
@@ -4381,6 +4881,21 @@ export default function App() {
             >
               消す
             </button>
+
+            {canUndoCourtAction && (
+              <button
+                className="courtUndoButton"
+                onClick={() => undoCourtAction(index)}
+                disabled={
+                  isConfirming ||
+                  isSyncSaving ||
+                  isCourtSwapMode ||
+                  isUndoingThisCourt
+                }
+              >
+                {isUndoingThisCourt ? "戻しています…" : "↩ ひとつ戻す"}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -5080,6 +5595,27 @@ export default function App() {
 
       {renderPracticeDayPrompt()}
 
+      {hasConfirmingCourt && !isViewerMode && (
+        <div className="confirmProcessingOverlay" aria-live="polite">
+          <div className="confirmProcessingCard">
+            <div className="confirmProcessingSpinner" />
+            <div className="confirmProcessingTitle">処理中…</div>
+            <div className="confirmProcessingSubtitle">
+              試合結果とレートを安全に保存しています
+            </div>
+
+            <div className="confirmProcessingGuideBox">
+              <div className="confirmProcessingGuideLabel">
+                このアプリの操作ヒント
+              </div>
+              <div className="confirmProcessingGuideText">
+                {currentProcessingGuide}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isViewerGuideOpen && (
         <div className="modalOverlay">
           <div className="modal">
@@ -5623,7 +6159,7 @@ export default function App() {
                   <>
                     <h3>レート変更履歴</h3>
                     <p className="adminSmallNote">
-                      直近50試合の確定履歴です。同じ試合IDは1回だけレートへ反映されます。
+                      直近50試合の確定履歴です。同じ試合IDは1回だけレートへ反映されます。取り消した確定は「取消済み」と表示されます。
                     </p>
 
                     <button
@@ -5640,10 +6176,24 @@ export default function App() {
 
                     <div className="rateHistoryList">
                       {rateHistoryItems.map((item) => (
-                        <div key={item.id} className="rateHistoryCard">
+                        <div
+                          key={item.id}
+                          className={
+                            item.undone
+                              ? "rateHistoryCard rateHistoryCardUndone"
+                              : "rateHistoryCard"
+                          }
+                        >
                           <div className="rateHistoryHeader">
                             <strong>{item.groupName || "グループ"}</strong>
-                            <span>コート{item.courtNumber || "-"}</span>
+                            <span>
+                              コート{item.courtNumber || "-"}
+                              {item.undone && (
+                                <span className="rateHistoryUndoneBadge">
+                                  取消済み
+                                </span>
+                              )}
+                            </span>
                           </div>
                           <div className="rateHistoryMeta">
                             {item.confirmedAtMillis

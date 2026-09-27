@@ -3868,7 +3868,7 @@ export default function App() {
         return next;
       });
       setSyncMessage(
-        "この操作のあとに別の更新が入ったため、安全のため「ひとつ戻す」は実行できません"
+        "この操作のあとに別の更新が入ったため、安全のため「戻す」は実行できません"
       );
       return;
     }
@@ -4485,11 +4485,11 @@ export default function App() {
             key={group.key}
             type="button"
             className={
-              existingKeys.has(group.key)
+              existingKeys.has(group.key) || group.key === "他"
                 ? "kanaJumpButton"
                 : "kanaJumpButton disabledKanaJumpButton"
             }
-            disabled={!existingKeys.has(group.key)}
+            disabled={group.key === "他" ? false : !existingKeys.has(group.key)}
             onClick={() => {
               refs.current[group.key]?.scrollIntoView({
                 behavior: "smooth",
@@ -4526,7 +4526,7 @@ export default function App() {
           {kanaJumpGroups.map((group) => {
             const groupMembers = grouped[group.key] || [];
 
-            if (groupMembers.length === 0) return null;
+            if (groupMembers.length === 0 && group.key !== "他") return null;
 
             return (
               <div
@@ -4536,7 +4536,7 @@ export default function App() {
                 }}
                 className="kanaGroupBlock"
               >
-                <div className="kanaGroupTitle">{group.label}行</div>
+                <div className="kanaGroupTitle">{group.key === "他" ? "他" : `${group.label}行`}</div>
                 <div className="memberGrid modalMemberGrid">
                   {groupMembers.map(renderMember)}
                 </div>
@@ -5055,7 +5055,7 @@ export default function App() {
                       onClick={() => generateCourt(index)}
                       disabled={isConfirming || isSyncSaving || isCourtSwapMode}
                     >
-                      組みなおし
+                      組直
                     </button>
                   )}
 
@@ -5078,7 +5078,7 @@ export default function App() {
                         isUndoingThisCourt
                       }
                     >
-                      {isUndoingThisCourt ? "戻しています…" : "↩ 一つ戻す"}
+                      {isUndoingThisCourt ? "戻しています…" : "戻す"}
                     </button>
                   )}
                 </div>
@@ -5130,7 +5130,7 @@ export default function App() {
                       isUndoingThisCourt
                     }
                   >
-                    {isUndoingThisCourt ? "戻しています…" : "↩ 一つ戻す"}
+                    {isUndoingThisCourt ? "戻しています…" : "戻す"}
                   </button>
                 )}
               </div>
@@ -5179,31 +5179,20 @@ export default function App() {
           読み方
           <input
             value={form.reading}
-            readOnly={showReadingManualButton && !readingManual}
-            onChange={(e) =>
+            onChange={(e) => {
+              if (showReadingManualButton) {
+                setReadingManual?.(true);
+              }
               setForm({
                 ...form,
                 reading: normalizeReadingInput(e.target.value),
-              })
-            }
+              });
+            }}
             placeholder="ニックネームから自動入力されます"
           />
           <span className="readingAutoNote">
-            カタカナはひらがなへ自動変換します。漢字の読み方候補が違う場合は「その他・読み方を修正」を押してください。
+            カタカナはひらがなへ自動変換します。読み方が違う場合は、この欄を直接修正してください。
           </span>
-          {showReadingManualButton && (
-            <button
-              type="button"
-              className={
-                readingManual
-                  ? "readingManualButton activeReadingManualButton"
-                  : "readingManualButton"
-              }
-              onClick={() => setReadingManual?.(true)}
-            >
-              その他・読み方を修正
-            </button>
-          )}
         </label>
         {formError && !form.reading.trim() && (
           <p className="errorText">入力してください</p>

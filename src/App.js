@@ -435,6 +435,88 @@ const layoutOptions = {
   8: [{ id: "eight", columns: 4, cells: [1, 2, 3, 4, 5, 6, 7, 8] }],
 };
 
+// 体育館形状＋使用コートタップ選択1
+// 横×縦で体育館全体の形を保持し、その中から実際に使うコートだけを選択する。
+const gymShapeOptions = [
+  { id: "1x1", label: "1×1", columns: 1, cells: [1], totalCourts: 1 },
+  { id: "2x1", label: "2×1", columns: 2, cells: [1, 2], totalCourts: 2 },
+  { id: "1x2", label: "1×2", columns: 1, cells: [1, 2], totalCourts: 2 },
+  { id: "3x1", label: "3×1", columns: 3, cells: [1, 2, 3], totalCourts: 3 },
+  { id: "4x1", label: "4×1", columns: 4, cells: [1, 2, 3, 4], totalCourts: 4 },
+  { id: "2x2", label: "2×2", columns: 2, cells: [1, 2, 3, 4], totalCourts: 4 },
+  { id: "3x2", label: "3×2", columns: 3, cells: [1, 2, 3, 4, 5, 6], totalCourts: 6 },
+  { id: "4x2", label: "4×2", columns: 4, cells: [1, 2, 3, 4, 5, 6, 7, 8], totalCourts: 8 },
+  { id: "5x2", label: "5×2", columns: 5, cells: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], totalCourts: 10 },
+  {
+    id: "dice5",
+    label: "5面・さいころ型",
+    columns: 3,
+    cells: [1, null, 2, null, 3, null, 4, null, 5],
+    totalCourts: 5,
+  },
+];
+
+function getGymShapeById(shapeId) {
+  return gymShapeOptions.find((shape) => shape.id === shapeId) || null;
+}
+
+function getDefaultGymShapeIdForCourtCount(count) {
+  const normalizedCount = Math.max(1, Number(count) || 1);
+  if (normalizedCount <= 1) return "1x1";
+  if (normalizedCount <= 2) return "2x1";
+  if (normalizedCount <= 3) return "3x1";
+  if (normalizedCount <= 4) return "2x2";
+  if (normalizedCount <= 6) return "3x2";
+  if (normalizedCount <= 8) return "4x2";
+  return "5x2";
+}
+
+function getGymShapeForGroup(group) {
+  if (!group) return null;
+
+  if (group.gymShapeId) {
+    const savedShape = getGymShapeById(group.gymShapeId);
+    if (savedShape) return savedShape;
+  }
+
+  // 旧形式のグループは、現在のlayoutIdをそのまま表示できるようにする。
+  const legacyLayouts = layoutOptions[Number(group.courtCount)] || [];
+  const legacyLayout =
+    legacyLayouts.find((layout) => layout.id === group.layoutId) || legacyLayouts[0];
+
+  if (legacyLayout) {
+    return {
+      id: "legacy",
+      label: "従来配置",
+      columns: legacyLayout.columns,
+      cells: legacyLayout.cells,
+      totalCourts: Math.max(
+        group.courts?.length || 0,
+        ...legacyLayout.cells.filter(Boolean),
+        1
+      ),
+      isLegacy: true,
+    };
+  }
+
+  const fallbackShape = getGymShapeById(
+    getDefaultGymShapeIdForCourtCount(group.courts?.length || group.courtCount || 1)
+  );
+
+  return fallbackShape;
+}
+
+function getActiveCourtSlotsForGroup(group, shape = getGymShapeForGroup(group)) {
+  if (!group || !shape) return [];
+
+  if (Array.isArray(group.activeCourtSlots) && group.activeCourtSlots.length > 0) {
+    return [...group.activeCourtSlots].sort((a, b) => a - b);
+  }
+
+  // 旧形式は表示されていた全コートを使用中として扱う。
+  return shape.cells.filter(Boolean).map((courtNumber) => courtNumber - 1);
+}
+
 function rotateLayout(layout) {
   if (!layout) return null;
 
@@ -514,23 +596,46 @@ function createGroupObject({
   groupName,
   courtCount,
   layoutId,
+  gymShapeId,
+  activeCourtSlots,
   rateDisplay,
   playCountVisible,
   pointRule,
   playCountSpreadLimit = 2,
 }) {
+  const gymShape = gymShapeId ? getGymShapeById(gymShapeId) : null;
+  const normalizedActiveCourtSlots = gymShape
+    ? [...new Set(activeCourtSlots || [])]
+        .filter(
+          (slotIndex) =>
+            Number.isInteger(slotIndex) &&
+            slotIndex >= 0 &&
+            slotIndex < gymShape.totalCourts
+        )
+        .sort((a, b) => a - b)
+    : Array.from({ length: Number(courtCount) || 1 }, (_, index) => index);
+
+  const totalCourtSlots = gymShape
+    ? gymShape.totalCourts
+    : Math.max(Number(courtCount) || 1, normalizedActiveCourtSlots.length);
+
   return {
     id: Date.now().toString(),
     groupName,
-    courtCount,
-    layoutId,
+    courtCount: String(normalizedActiveCourtSlots.length),
+    layoutId: gymShape ? `gym-${gymShape.id}` : layoutId,
+    gymShapeId: gymShape?.id || "",
+    gymTotalCourtSlots: totalCourtSlots,
+    activeCourtSlots: normalizedActiveCourtSlots,
     rateDisplay,
     playCountVisible,
     pointRule,
     playCountSpreadLimit,
     createdAt: Date.now(),
     waitingMembers: [],
-    courts: Array.from({ length: Number(courtCount) }, () => null),
+    // courtsは体育館全体の位置と同じindexで保持する。
+    // 未使用コートもnullのまま残すことで、追加・削除しても位置が変わらない。
+    courts: Array.from({ length: totalCourtSlots }, () => null),
     pairHistory: {},
     opponentHistory: {},
     relationshipHistory: {},
@@ -792,6 +897,9 @@ export default function App() {
   const [createPlayCountVisible, setCreatePlayCountVisible] = useState("");
   const [createPointRule, setCreatePointRule] = useState("");
   const [createPlayCountSpreadLimit, setCreatePlayCountSpreadLimit] = useState("");
+  const [createStep, setCreateStep] = useState(1);
+  const [createGymShapeId, setCreateGymShapeId] = useState("");
+  const [createActiveCourtSlots, setCreateActiveCourtSlots] = useState([]);
   const [groupError, setGroupError] = useState(false);
 
   const [layoutChangeMode, setLayoutChangeMode] = useState(null);
@@ -814,6 +922,7 @@ export default function App() {
   const [memberForm, setMemberForm] = useState(emptyMemberForm);
   const [memberFormError, setMemberFormError] = useState(false);
   const [duplicateNicknameError, setDuplicateNicknameError] = useState("");
+  const [isMemberReadingManual, setIsMemberReadingManual] = useState(false);
 
   const [editingMemberId, setEditingMemberId] = useState(null);
   const [editMemberForm, setEditMemberForm] = useState(emptyMemberForm);
@@ -1808,10 +1917,17 @@ export default function App() {
   }, [sortedMembers, viewerMemberSearch]);
 
   const selectedLayout = useMemo(() => {
-    if (!activeGroup) return null;
-    const layouts = layoutOptions[Number(activeGroup.courtCount)] || [];
-    return layouts.find((layout) => layout.id === activeGroup.layoutId) || null;
+    return getGymShapeForGroup(activeGroup);
   }, [activeGroup]);
+
+  const activeCourtSlots = useMemo(() => {
+    return getActiveCourtSlotsForGroup(activeGroup, selectedLayout);
+  }, [activeGroup, selectedLayout]);
+
+  const activeCourtSlotSet = useMemo(
+    () => new Set(activeCourtSlots),
+    [activeCourtSlots]
+  );
 
   const shouldShowRotateMessage = useMemo(() => {
     return hasThreeOrMoreHorizontalCourts(selectedLayout);
@@ -1856,48 +1972,6 @@ export default function App() {
   }, [sortedMembers, selectedIds]);
 
 
-  const applyCourtLayoutChange = async (layoutId) => {
-    if (!activeGroup || !layoutChangeMode || !pendingCourtCount) return;
-
-    const nextCount = Number(pendingCourtCount);
-
-    let syncedGroups = groups.map((group) => {
-      if (group.id !== activeGroupId) return group;
-
-      let nextCourts = [...group.courts];
-
-      if (layoutChangeMode === "delete") {
-        let removed = false;
-
-        nextCourts = nextCourts.filter((court) => {
-          if (!removed && !court) {
-            removed = true;
-            return false;
-          }
-          return true;
-        });
-      }
-
-      if (layoutChangeMode === "add") {
-        nextCourts.push(null);
-      }
-
-      return {
-        ...group,
-        courtCount: String(nextCount),
-        layoutId,
-        courts: nextCourts,
-        selectedSwap: null,
-      };
-    });
-
-    setGroups(syncedGroups);
-    setLayoutChangeMode(null);
-    setPendingCourtCount("");
-
-    await saveGroupsToFirestore(syncedGroups, activeGroupId);
-  };
-
   const resetCreateForm = () => {
     setCreateGroupName("");
     setCreateCourtCount("");
@@ -1905,6 +1979,9 @@ export default function App() {
     setCreatePlayCountVisible("");
     setCreatePointRule("");
     setCreatePlayCountSpreadLimit("");
+    setCreateGymShapeId("");
+    setCreateActiveCourtSlots([]);
+    setCreateStep(1);
     setGroupError(false);
   };
 
@@ -1913,20 +1990,57 @@ export default function App() {
     setScreen("create");
   };
 
-  const selectCourtCount = (count) => {
-    const firstLayout = layoutOptions[count][0];
-    setCreateCourtCount(String(count));
-    setCreateLayoutId(firstLayout.id);
+  const selectCreateGymShape = (shapeId) => {
+    setCreateGymShapeId(shapeId);
+    setCreateActiveCourtSlots([]);
+    setGroupError(false);
+  };
+
+  const toggleCreateCourtSlot = (slotIndex) => {
+    setCreateActiveCourtSlots((prevSlots) => {
+      if (prevSlots.includes(slotIndex)) {
+        return prevSlots.filter((index) => index !== slotIndex);
+      }
+
+      return [...prevSlots, slotIndex].sort((a, b) => a - b);
+    });
+    setGroupError(false);
+  };
+
+  const goToNextCreateStep = () => {
+    const stepIsValid =
+      (createStep === 1 && Boolean(createGroupName)) ||
+      (createStep === 2 &&
+        Boolean(createGymShapeId) &&
+        createActiveCourtSlots.length > 0) ||
+      (createStep === 3 && Boolean(createPlayCountVisible)) ||
+      (createStep === 4 && createPlayCountSpreadLimit !== "") ||
+      (createStep === 5 && Boolean(createPointRule));
+
+    if (!stepIsValid) {
+      setGroupError(true);
+      return;
+    }
+
+    setGroupError(false);
+    setCreateStep((prevStep) => Math.min(6, prevStep + 1));
+  };
+
+  const goToPreviousCreateStep = () => {
+    setGroupError(false);
+    setCreateStep((prevStep) => Math.max(1, prevStep - 1));
   };
 
   const createGroup = async () => {
+    const gymShape = getGymShapeById(createGymShapeId);
+
     if (
       !createGroupName ||
-      !createCourtCount ||
-      !createLayoutId ||
+      !gymShape ||
+      createActiveCourtSlots.length === 0 ||
       !createPlayCountVisible ||
       !createPointRule ||
-      !createPlayCountSpreadLimit
+      createPlayCountSpreadLimit === ""
     ) {
       setGroupError(true);
       return;
@@ -1934,8 +2048,10 @@ export default function App() {
 
     const newGroup = createGroupObject({
       groupName: createGroupName,
-      courtCount: createCourtCount,
-      layoutId: createLayoutId,
+      gymShapeId: gymShape.id,
+      activeCourtSlots: createActiveCourtSlots,
+      courtCount: String(createActiveCourtSlots.length),
+      layoutId: `gym-${gymShape.id}`,
       rateDisplay: currentCircle?.defaultRateDisplay || "あり",
       playCountVisible: createPlayCountVisible,
       pointRule: createPointRule,
@@ -1950,6 +2066,69 @@ export default function App() {
     setScreen("main");
 
     await saveGroupsToFirestore(nextGroups, newGroup.id);
+  };
+
+  const applyCourtUsageChange = async (slotIndex) => {
+    if (!activeGroup || !layoutChangeMode) return;
+
+    if (!activeGroup.gymShapeId) {
+      alert(
+        "このグループは旧コート配置方式で作成されています。新しいグループから体育館タップ方式を利用できます。"
+      );
+      setLayoutChangeMode(null);
+      return;
+    }
+
+    const currentSlots = getActiveCourtSlotsForGroup(activeGroup);
+    const currentSlotSet = new Set(currentSlots);
+
+    if (layoutChangeMode === "add") {
+      if (currentSlotSet.has(slotIndex)) return;
+      currentSlotSet.add(slotIndex);
+    }
+
+    if (layoutChangeMode === "delete") {
+      if (!currentSlotSet.has(slotIndex)) return;
+
+      if (currentSlotSet.size <= 1) {
+        alert("使用コートは1面以上必要です");
+        return;
+      }
+
+      if (activeGroup.courts?.[slotIndex]) {
+        alert("試合中のコートは削除できません。先に試合を消してください。");
+        return;
+      }
+
+      currentSlotSet.delete(slotIndex);
+    }
+
+    const nextActiveCourtSlots = [...currentSlotSet].sort((a, b) => a - b);
+    const nextGroups = groups.map((group) => {
+      if (group.id !== activeGroupId) return group;
+
+      const nextCourts = [...(group.courts || [])];
+      while (nextCourts.length < (group.gymTotalCourtSlots || nextCourts.length)) {
+        nextCourts.push(null);
+      }
+
+      if (layoutChangeMode === "delete") {
+        nextCourts[slotIndex] = null;
+      }
+
+      return {
+        ...group,
+        activeCourtSlots: nextActiveCourtSlots,
+        courtCount: String(nextActiveCourtSlots.length),
+        courts: nextCourts,
+        selectedSwap: null,
+      };
+    });
+
+    setGroups(nextGroups);
+    setLayoutChangeMode(null);
+    setPendingCourtCount("");
+    await saveGroupsToFirestore(nextGroups, activeGroupId);
   };
 
   const switchGroup = (groupId) => {
@@ -2477,39 +2656,47 @@ export default function App() {
   const openCourtAddLayoutSelect = () => {
     if (!activeGroup) return;
 
-    const nextCount = Number(activeGroup.courtCount) + 1;
-
-    if (nextCount > 8) {
-      alert("コートは最大8面までです");
+    if (!activeGroup.gymShapeId) {
+      alert(
+        "このグループは旧コート配置方式です。次に新規作成するグループから、体育館全体を記録してコートをタップ追加できます。"
+      );
       return;
     }
 
-    setPendingCourtCount(String(nextCount));
+    const shape = getGymShapeForGroup(activeGroup);
+    const activeSlots = getActiveCourtSlotsForGroup(activeGroup, shape);
+
+    if (activeSlots.length >= (shape?.totalCourts || 0)) {
+      alert("体育館内のすべてのコートを使用中です");
+      return;
+    }
+
     setLayoutChangeMode("add");
   };
 
   const openCourtDeleteLayoutSelect = () => {
     if (!activeGroup) return;
 
-    const emptyCourtExists = courts.some((court) => !court);
-
-    if (!emptyCourtExists) {
-      alert("空きコートがありません");
+    if (!activeGroup.gymShapeId) {
+      alert(
+        "このグループは旧コート配置方式です。次に新規作成するグループから、コートをタップして削除できます。"
+      );
       return;
     }
 
-    if (Number(activeGroup.courtCount) <= 1) {
+    const activeSlots = getActiveCourtSlotsForGroup(activeGroup);
+    const deletableExists = activeSlots.some((slotIndex) => !courts[slotIndex]);
+
+    if (activeSlots.length <= 1) {
       alert("コートは1面未満にできません");
       return;
     }
 
-    const confirmDelete = window.confirm("コートを削除しますか？");
+    if (!deletableExists) {
+      alert("削除できる空きコートがありません");
+      return;
+    }
 
-    if (!confirmDelete) return;
-
-    const nextCount = Number(activeGroup.courtCount) - 1;
-
-    setPendingCourtCount(String(nextCount));
     setLayoutChangeMode("delete");
   };
 
@@ -2874,6 +3061,27 @@ export default function App() {
     }
   };
 
+  const openNewMemberRegistrationScreen = () => {
+    setIsParticipationModalOpen(false);
+    setIsNewMemberFormOpen(false);
+    setMemberForm(emptyMemberForm);
+    setMemberFormError(false);
+    setDuplicateNicknameError("");
+    setRegistrationSuccessMessage("");
+    setIsMemberReadingManual(false);
+    setScreen("newMember");
+  };
+
+  const closeNewMemberRegistrationScreen = async () => {
+    setMemberForm(emptyMemberForm);
+    setMemberFormError(false);
+    setDuplicateNicknameError("");
+    setIsMemberReadingManual(false);
+    setScreen("main");
+    setIsParticipationModalOpen(true);
+    await refreshMembersForParticipation();
+  };
+
   const nicknameExists = (nickname, ignoreId = null) => {
     return members.some((member) => {
       if (ignoreId && member.id === ignoreId) return false;
@@ -2917,14 +3125,19 @@ export default function App() {
           ? prevMembers
           : [...prevMembers, newMember]
       );
-      setTempSelectedIds((prevIds) => [...prevIds, newMember.id]);
+      setTempSelectedIds((prevIds) =>
+        prevIds.includes(newMember.id) ? prevIds : [...prevIds, newMember.id]
+      );
       await refreshMembersForParticipation();
       setMemberForm(emptyMemberForm);
       setMemberFormError(false);
       setDuplicateNicknameError("");
       setIsNewMemberFormOpen(false);
-      setRegistrationSuccessMessage("登録しました");
-      window.setTimeout(() => setRegistrationSuccessMessage(""), 2200);
+      setIsMemberReadingManual(false);
+      setRegistrationSuccessMessage("登録しました。参加メンバーとして選択されています。");
+      setScreen("main");
+      setIsParticipationModalOpen(true);
+      window.setTimeout(() => setRegistrationSuccessMessage(""), 2600);
     } catch (error) {
       setDuplicateNicknameError("メンバー登録に失敗しました");
     }
@@ -4818,22 +5031,57 @@ export default function App() {
             </div>
 
             <div className="vs courtMiddleRow">
-              <span>
+              <span className="courtVsLabel">
                 VS <span className="courtNumberBadge">{getCircledNumber(courtNumber)}</span>
               </span>
 
-              {!isViewerMode && court.winner && (
-                isConfirming ? (
-                  <span className="confirmProcessingText">処理中…</span>
-                ) : (
+              {!isViewerMode && (
+                <div className="courtMiddleControls">
+                  {court.winner ? (
+                    isConfirming ? (
+                      <span className="confirmProcessingText">処理中…</span>
+                    ) : (
+                      <button
+                        className="inlineConfirmButton"
+                        onClick={() => confirmCourtResult(index)}
+                        disabled={isSyncSaving || isCourtSwapMode}
+                      >
+                        確定
+                      </button>
+                    )
+                  ) : (
+                    <button
+                      className="courtMiddleActionButton"
+                      onClick={() => generateCourt(index)}
+                      disabled={isConfirming || isSyncSaving || isCourtSwapMode}
+                    >
+                      組みなおし
+                    </button>
+                  )}
+
                   <button
-                    className="inlineConfirmButton"
-                    onClick={() => confirmCourtResult(index)}
-                    disabled={isSyncSaving || isCourtSwapMode}
+                    className="courtMiddleActionButton courtMiddleClearButton"
+                    onClick={() => clearCourt(index)}
+                    disabled={isConfirming || isSyncSaving || isCourtSwapMode}
                   >
-                    確定
+                    消す
                   </button>
-                )
+
+                  {canUndoCourtAction && (
+                    <button
+                      className="courtMiddleActionButton courtUndoButton"
+                      onClick={() => undoCourtAction(index)}
+                      disabled={
+                        isConfirming ||
+                        isSyncSaving ||
+                        isCourtSwapMode ||
+                        isUndoingThisCourt
+                      }
+                    >
+                      {isUndoingThisCourt ? "戻しています…" : "↩ 一つ戻す"}
+                    </button>
+                  )}
+                </div>
               )}
             </div>
 
@@ -4861,40 +5109,31 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <div className="emptyCourt">空き</div>
-        )}
-
-        {!isViewerMode && (
-          <div className="row courtActionRow">
-            {!court?.winner && (
-              <button
-                onClick={() => generateCourt(index)}
-                disabled={isConfirming || isSyncSaving || isCourtSwapMode}
-              >
-                {court ? "組みなおし" : "新規"}
-              </button>
-            )}
-            <button
-              className="subButton"
-              onClick={() => clearCourt(index)}
-              disabled={isConfirming || isSyncSaving || isCourtSwapMode}
-            >
-              消す
-            </button>
-
-            {canUndoCourtAction && (
-              <button
-                className="courtUndoButton"
-                onClick={() => undoCourtAction(index)}
-                disabled={
-                  isConfirming ||
-                  isSyncSaving ||
-                  isCourtSwapMode ||
-                  isUndoingThisCourt
-                }
-              >
-                {isUndoingThisCourt ? "戻しています…" : "↩ ひとつ戻す"}
-              </button>
+          <div className="emptyCourt">
+            <span>空き</span>
+            {!isViewerMode && (
+              <div className="emptyCourtActions">
+                <button
+                  onClick={() => generateCourt(index)}
+                  disabled={isConfirming || isSyncSaving || isCourtSwapMode}
+                >
+                  新規
+                </button>
+                {canUndoCourtAction && (
+                  <button
+                    className="courtUndoButton"
+                    onClick={() => undoCourtAction(index)}
+                    disabled={
+                      isConfirming ||
+                      isSyncSaving ||
+                      isCourtSwapMode ||
+                      isUndoingThisCourt
+                    }
+                  >
+                    {isUndoingThisCourt ? "戻しています…" : "↩ 一つ戻す"}
+                  </button>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -4909,6 +5148,10 @@ export default function App() {
     onSave,
     onClose,
     isEdit,
+    readingManual = false,
+    setReadingManual = null,
+    showReadingManualButton = false,
+    closeLabel = "",
   }) => {
     return (
       <div className={`newMemberBox ${isEdit ? "editMode" : "registerMode"}`}>
@@ -4918,9 +5161,13 @@ export default function App() {
           ニックネーム
           <input
             value={form.nickname}
-            onChange={(e) =>
-              updateFormNicknameWithAutoReading(form, setForm, e.target.value)
-            }
+            onChange={(e) => {
+              if (showReadingManualButton && readingManual) {
+                setForm({ ...form, nickname: e.target.value });
+                return;
+              }
+              updateFormNicknameWithAutoReading(form, setForm, e.target.value);
+            }}
             placeholder="例：田中 / タナカ / たなか"
           />
         </label>
@@ -4932,6 +5179,7 @@ export default function App() {
           読み方
           <input
             value={form.reading}
+            readOnly={showReadingManualButton && !readingManual}
             onChange={(e) =>
               setForm({
                 ...form,
@@ -4941,8 +5189,21 @@ export default function App() {
             placeholder="ニックネームから自動入力されます"
           />
           <span className="readingAutoNote">
-            カタカナは自動でひらがなに変換します。漢字は一般的な名字のみ候補を自動入力するため、必ず読み方を確認してください。
+            カタカナはひらがなへ自動変換します。漢字の読み方候補が違う場合は「その他・読み方を修正」を押してください。
           </span>
+          {showReadingManualButton && (
+            <button
+              type="button"
+              className={
+                readingManual
+                  ? "readingManualButton activeReadingManualButton"
+                  : "readingManualButton"
+              }
+              onClick={() => setReadingManual?.(true)}
+            >
+              その他・読み方を修正
+            </button>
+          )}
         </label>
         {formError && !form.reading.trim() && (
           <p className="errorText">入力してください</p>
@@ -4999,7 +5260,7 @@ export default function App() {
             {isEdit ? "決定" : "この内容で登録"}
           </button>
           <button className="subButton" onClick={onClose}>
-            {isEdit ? "もどる" : "閉じる"}
+            {closeLabel || (isEdit ? "もどる" : "閉じる")}
           </button>
         </div>
 
@@ -5021,6 +5282,49 @@ export default function App() {
             )}
           </>
         )}
+      </div>
+    );
+  };
+
+  const renderNewMemberRegistrationScreen = () => {
+    return (
+      <div className="app memberRegistrationScreen">
+        <div className="circleHeader">
+          <div>
+            <div className="circleLabel">ログイン中</div>
+            <strong>{currentCircle.circleName}</strong>
+          </div>
+
+          <div className="headerRightButtons">
+            <button className="logoutButton" onClick={logoutCircle}>
+              ログアウト
+            </button>
+          </div>
+        </div>
+
+        <div className="registrationScreenHeader">
+          <div className="registrationScreenIcon">＋</div>
+          <div>
+            <h1>新規メンバー登録</h1>
+            <p>登録が終わると、参加メンバー選択画面へ戻ります。</p>
+          </div>
+        </div>
+
+        <section className="card dedicatedRegistrationCard">
+          {renderMemberForm({
+            form: memberForm,
+            setForm: setMemberForm,
+            formError: memberFormError,
+            duplicateError: duplicateNicknameError,
+            onSave: saveMember,
+            onClose: closeNewMemberRegistrationScreen,
+            isEdit: false,
+            readingManual: isMemberReadingManual,
+            setReadingManual: setIsMemberReadingManual,
+            showReadingManualButton: true,
+            closeLabel: "参加メンバー選択へ戻る",
+          })}
+        </section>
       </div>
     );
   };
@@ -5071,6 +5375,10 @@ export default function App() {
 
   if (screen === "importMembers") {
     return renderImportMemberScreen();
+  }
+
+  if (screen === "newMember") {
+    return renderNewMemberRegistrationScreen();
   }
 
 
@@ -5167,152 +5475,237 @@ export default function App() {
 
         <h1>グループ作成</h1>
 
-        <section className="card">
-          <h2>名前</h2>
-          <div className="optionGrid">
-            {groupNameOptions.map((g) => (
-              <button
-                key={g}
-                onClick={() => setCreateGroupName(g)}
-                className={createGroupName === g ? "option selectedOption" : "option"}
-              >
-                {g}
-              </button>
-            ))}
+        <div className="createWizardProgress">
+          <div className="createWizardProgressText">
+            {createStep <= 5 ? `${createStep} / 5` : "確認"}
           </div>
-          {groupError && !createGroupName && (
-            <p className="errorText">選択してください</p>
-          )}
-        </section>
-
-        <section className="card">
-          <h2>コート数</h2>
-          <div className="numberGrid">
-            {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
-              <button
-                key={n}
-                onClick={() => selectCourtCount(n)}
-                className={
-                  createCourtCount === String(n) ? "option selectedOption" : "option"
-                }
-              >
-                {n}
-              </button>
-            ))}
+          <div className="createWizardProgressBar">
+            <div
+              className="createWizardProgressFill"
+              style={{ width: `${Math.min(createStep, 5) * 20}%` }}
+            />
           </div>
-          {groupError && !createCourtCount && (
-            <p className="errorText">選択してください</p>
-          )}
-        </section>
+        </div>
 
-        {createCourtCount && (
-          <section className="card">
-            <h2>コート配置</h2>
-            <div className="layoutOptionList">
-              {currentLayouts.map((layout) => (
+        {createStep === 1 && (
+          <section className="card createWizardCard">
+            <h2>グループ名を選んでください</h2>
+            <div className="optionGrid">
+              {groupNameOptions.map((g) => (
                 <button
-                  key={layout.id}
-                  onClick={() => setCreateLayoutId(layout.id)}
-                  className={
-                    createLayoutId === layout.id
-                      ? "layoutOption selectedLayoutOption"
-                      : "layoutOption"
-                  }
+                  key={g}
+                  onClick={() => {
+                    setCreateGroupName(g);
+                    setGroupError(false);
+                  }}
+                  className={createGroupName === g ? "option selectedOption" : "option"}
                 >
-                  <MiniLayout layout={layout} />
+                  {g}
                 </button>
               ))}
             </div>
-            {groupError && !createLayoutId && (
+            {groupError && !createGroupName && (
               <p className="errorText">選択してください</p>
             )}
           </section>
         )}
 
-        
-        <section className="card">
-          <h2>参加回数を表示しますか</h2>
-          <div className="optionGrid">
-            {rateDisplayOptions.map((option) => (
-              <button
-                key={option}
-                onClick={() => setCreatePlayCountVisible(option)}
-                className={
-                  createPlayCountVisible === option
-                    ? "option selectedOption"
-                    : "option"
-                }
-              >
-                {option}
-              </button>
-            ))}
-          </div>
-          {groupError && !createPlayCountVisible && (
-            <p className="errorText">選択してください</p>
+        {createStep === 2 && (
+          <section className="card createWizardCard">
+            <h2>体育館全体のコート配置</h2>
+            <p className="createWizardDescription">
+              上から体育館全体の形を選び、下の図で今日使うコートだけをタップしてください。
+            </p>
+
+            <div className="gymShapeOptionGrid">
+              {gymShapeOptions.map((shape) => (
+                <button
+                  key={shape.id}
+                  className={
+                    createGymShapeId === shape.id
+                      ? "gymShapeOption selectedGymShapeOption"
+                      : "gymShapeOption"
+                  }
+                  onClick={() => selectCreateGymShape(shape.id)}
+                >
+                  <strong>{shape.label}</strong>
+                  <span>{shape.totalCourts}面</span>
+                </button>
+              ))}
+            </div>
+
+            {createGymShapeId && (() => {
+              const shape = getGymShapeById(createGymShapeId);
+              if (!shape) return null;
+
+              return (
+                <div className="gymCourtSelectionBlock">
+                  <div className="gymCourtSelectionHeader">
+                    <strong>{shape.label}</strong>
+                    <span>使用：{createActiveCourtSlots.length}面</span>
+                  </div>
+
+                  <div
+                    className="gymCourtGrid"
+                    style={{ gridTemplateColumns: `repeat(${shape.columns}, minmax(64px, 1fr))` }}
+                  >
+                    {shape.cells.map((courtNumber, cellIndex) => {
+                      if (!courtNumber) {
+                        return <div key={`gym-blank-${cellIndex}`} className="gymCourtBlank" />;
+                      }
+
+                      const slotIndex = courtNumber - 1;
+                      const selected = createActiveCourtSlots.includes(slotIndex);
+
+                      return (
+                        <button
+                          key={`gym-court-${courtNumber}`}
+                          className={selected ? "gymCourtCell selectedGymCourtCell" : "gymCourtCell"}
+                          onClick={() => toggleCreateCourtSlot(slotIndex)}
+                        >
+                          <span>コート</span>
+                          <strong>{getCircledNumber(courtNumber)}</strong>
+                          <small>{selected ? "使用する" : "タップで選択"}</small>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {groupError && (!createGymShapeId || createActiveCourtSlots.length === 0) && (
+              <p className="errorText">体育館の形と、使用するコートを選択してください</p>
+            )}
+          </section>
+        )}
+
+        {createStep === 3 && (
+          <section className="card createWizardCard">
+            <h2>参加回数を表示しますか？</h2>
+            <div className="optionGrid">
+              {rateDisplayOptions.map((option) => (
+                <button
+                  key={option}
+                  onClick={() => {
+                    setCreatePlayCountVisible(option);
+                    setGroupError(false);
+                  }}
+                  className={
+                    createPlayCountVisible === option
+                      ? "option selectedOption"
+                      : "option"
+                  }
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+            {groupError && !createPlayCountVisible && (
+              <p className="errorText">選択してください</p>
+            )}
+          </section>
+        )}
+
+        {createStep === 4 && (
+          <section className="card createWizardCard">
+            <h2>参加回数の差を何回まで許可しますか？</h2>
+            <p className="pointRuleDescription">
+              1回まで：かなり公平 / 2回まで：標準 / 3回まで：交流優先 / 気にしない：レート・ペア重複優先
+            </p>
+            <div className="playCountSpreadCreateGrid">
+              {playCountSpreadOptions.map((option) => (
+                <button
+                  key={option.label}
+                  onClick={() => {
+                    setCreatePlayCountSpreadLimit(option.value);
+                    setGroupError(false);
+                  }}
+                  className={
+                    createPlayCountSpreadLimit === option.value
+                      ? "playCountSpreadCreateOption selectedOption"
+                      : "playCountSpreadCreateOption"
+                  }
+                >
+                  <strong>{option.label}</strong>
+                  <span>{option.note}</span>
+                </button>
+              ))}
+            </div>
+            {groupError && createPlayCountSpreadLimit === "" && (
+              <p className="errorText">選択してください</p>
+            )}
+          </section>
+        )}
+
+        {createStep === 5 && (
+          <section className="card createWizardCard">
+            <h2>何点制ですか？</h2>
+            <p className="pointRuleDescription">
+              途中参加した人の参加回数補正に使用します。
+            </p>
+            <div className="optionGrid">
+              {["11点", "15点", "21点"].map((option) => (
+                <button
+                  key={option}
+                  onClick={() => {
+                    setCreatePointRule(option);
+                    setGroupError(false);
+                  }}
+                  className={
+                    createPointRule === option ? "option selectedOption" : "option"
+                  }
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+            {groupError && !createPointRule && (
+              <p className="errorText">選択してください</p>
+            )}
+          </section>
+        )}
+
+        {createStep === 6 && (
+          <section className="card createWizardCard createConfirmCard">
+            <h2>この内容で作成しますか？</h2>
+            <div className="createConfirmList">
+              <div><span>グループ名</span><strong>{createGroupName}</strong></div>
+              <div><span>体育館</span><strong>{getGymShapeById(createGymShapeId)?.label}</strong></div>
+              <div><span>使用コート</span><strong>{createActiveCourtSlots.map((slot) => getCircledNumber(slot + 1)).join(" ")}</strong></div>
+              <div><span>使用面数</span><strong>{createActiveCourtSlots.length}面</strong></div>
+              <div><span>参加回数表示</span><strong>{createPlayCountVisible}</strong></div>
+              <div><span>参加回数差</span><strong>{playCountSpreadOptions.find((item) => item.value === createPlayCountSpreadLimit)?.label || "気にしない"}</strong></div>
+              <div><span>点数制</span><strong>{createPointRule}</strong></div>
+            </div>
+          </section>
+        )}
+
+        <div className="createWizardActions">
+          {createStep > 1 && (
+            <button className="subButton" onClick={goToPreviousCreateStep}>
+              戻る
+            </button>
           )}
-        </section>
 
-        <section className="card">
-          <h2>参加回数の差を何回まで許可しますか？</h2>
-          <p className="pointRuleDescription">
-            1回まで：かなり公平 / 2回まで：標準 / 3回まで：交流優先 / 気にしない：レート・ペア重複優先
-          </p>
-          <div className="playCountSpreadCreateGrid">
-            {playCountSpreadOptions.map((option) => (
-              <button
-                key={option.label}
-                onClick={() => setCreatePlayCountSpreadLimit(option.value)}
-                className={
-                  createPlayCountSpreadLimit === option.value
-                    ? "playCountSpreadCreateOption selectedOption"
-                    : "playCountSpreadCreateOption"
-                }
-              >
-                <strong>{option.label}</strong>
-                <span>{option.note}</span>
-              </button>
-            ))}
-          </div>
-          {groupError && !createPlayCountSpreadLimit && (
-            <p className="errorText">選択してください</p>
+          {createStep < 6 ? (
+            <button className="createNextButton" onClick={goToNextCreateStep}>
+              次へ
+            </button>
+          ) : (
+            <button className="createFinishButton" onClick={createGroup}>
+              この内容で作成
+            </button>
           )}
-        </section>
 
-        <section className="card">
-          <h2>何点制ですか</h2>
-          <p className="pointRuleDescription">
-            （これで途中参加の人の参加回数を調節します）
-          </p>
-          <div className="optionGrid">
-            {["11点", "15点", "21点"].map((option) => (
-              <button
-                key={option}
-                onClick={() => setCreatePointRule(option)}
-                className={
-                  createPointRule === option ? "option selectedOption" : "option"
-                }
-              >
-                {option}
-              </button>
-            ))}
-          </div>
-          {groupError && !createPointRule && (
-            <p className="errorText">選択してください</p>
-          )}
-        </section>
-
-        {groupError && <p className="mainError">選ばれていません</p>}
-
-        <div className="bottomActions">
-          <button onClick={createGroup}>作成</button>
           <button
-            className="subButton"
+            className="createCancelButton"
             onClick={() => {
               resetCreateForm();
               setScreen(groups.length > 0 ? "main" : "home");
             }}
           >
-            戻る
+            作成をやめる
           </button>
         </div>
       </div>
@@ -5532,13 +5925,23 @@ export default function App() {
         }}
       >
         {displayLayout
-          ? displayLayout.cells.map((cell, index) =>
-              cell ? (
-                renderCourt(cell)
-              ) : (
-                <div key={`blank-${index}`} className="courtBlank" />
-              )
-            )
+          ? displayLayout.cells.map((cell, index) => {
+              if (!cell) {
+                return <div key={`blank-${index}`} className="courtBlank" />;
+              }
+
+              const slotIndex = cell - 1;
+              if (!activeCourtSlotSet.has(slotIndex)) {
+                return (
+                  <div key={`unused-${index}`} className="courtBlank inactiveCourtSlot">
+                    <span>{getCircledNumber(cell)}</span>
+                    <small>未使用</small>
+                  </div>
+                );
+              }
+
+              return renderCourt(cell);
+            })
           : courts.map((_, index) => renderCourt(index + 1))}
       </div>
 
@@ -6401,23 +6804,65 @@ export default function App() {
         </div>
       )}
 
-      {layoutChangeMode && pendingCourtCount && (
+      {layoutChangeMode && activeGroup?.gymShapeId && displayLayout && (
         <div className="modalOverlay">
-          <div className="modal">
+          <div className="modal courtUsageModal">
             <h2>
-              {pendingCourtCount}コートの配置を選択
+              {layoutChangeMode === "add"
+                ? "追加するコートを選択"
+                : "減らすコートを選択"}
             </h2>
 
-            <div className="layoutOptionList">
-              {(layoutOptions[Number(pendingCourtCount)] || []).map((layout) => (
-                <button
-                  key={layout.id}
-                  onClick={() => applyCourtLayoutChange(layout.id)}
-                  className="layoutOption"
-                >
-                  <MiniLayout layout={layout} />
-                </button>
-              ))}
+            <p className="adminSmallNote">
+              体育館全体の形は変更されません。対象のコートをタップしてください。
+            </p>
+
+            <div
+              className="gymCourtGrid courtUsageGrid"
+              style={{
+                gridTemplateColumns: `repeat(${displayLayout.columns}, minmax(64px, 1fr))`,
+              }}
+            >
+              {displayLayout.cells.map((courtNumber, cellIndex) => {
+                if (!courtNumber) {
+                  return <div key={`usage-blank-${cellIndex}`} className="gymCourtBlank" />;
+                }
+
+                const slotIndex = courtNumber - 1;
+                const isActive = activeCourtSlotSet.has(slotIndex);
+                const hasGame = Boolean(courts[slotIndex]);
+                const selectable =
+                  layoutChangeMode === "add"
+                    ? !isActive
+                    : isActive && !hasGame && activeCourtSlots.length > 1;
+
+                return (
+                  <button
+                    key={`usage-court-${courtNumber}`}
+                    className={
+                      isActive
+                        ? `gymCourtCell selectedGymCourtCell ${hasGame ? "gymCourtHasGame" : ""}`
+                        : "gymCourtCell"
+                    }
+                    disabled={!selectable}
+                    onClick={() => applyCourtUsageChange(slotIndex)}
+                  >
+                    <span>コート</span>
+                    <strong>{getCircledNumber(courtNumber)}</strong>
+                    <small>
+                      {hasGame
+                        ? "試合中"
+                        : isActive
+                        ? layoutChangeMode === "delete"
+                          ? "タップで減らす"
+                          : "使用中"
+                        : layoutChangeMode === "add"
+                        ? "タップで追加"
+                        : "未使用"}
+                    </small>
+                  </button>
+                );
+              })}
             </div>
 
             <div className="bottomActions">
@@ -6457,13 +6902,10 @@ export default function App() {
             <div className="participationActions">
               <button
                 className="newMemberOpenButton"
-                onClick={() => {
-                  setIsNewMemberFormOpen(!isNewMemberFormOpen);
-                  setIsEditSelectMode(false);
-                  setRegistrationSuccessMessage("");
-                }}
+                onClick={openNewMemberRegistrationScreen}
               >
                 ＋ 新規メンバー登録
+                <span className="newMemberOpenButtonSub">専用画面で登録</span>
               </button>
 
               <button
@@ -6499,22 +6941,6 @@ export default function App() {
             {isEditSelectMode && (
               <p className="editSelectGuide">編集するメンバーを選んでください</p>
             )}
-
-            {isNewMemberFormOpen &&
-              renderMemberForm({
-                form: memberForm,
-                setForm: setMemberForm,
-                formError: memberFormError,
-                duplicateError: duplicateNicknameError,
-                onSave: saveMember,
-                onClose: () => {
-                  setIsNewMemberFormOpen(false);
-                  setMemberForm(emptyMemberForm);
-                  setMemberFormError(false);
-                  setDuplicateNicknameError("");
-                },
-                isEdit: false,
-              })}
 
             {editingMemberId &&
               renderMemberForm({

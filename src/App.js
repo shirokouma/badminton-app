@@ -206,6 +206,14 @@ function makeBestGame(
               Math.random();
 
             if (!best || score < best.score) {
+              const matchReasons = [
+                groupZeroCount > 0 ? "初回参加優先" : "参加回数優先",
+                courtGroupPenalty === 0 ? "同じ4人回避" : null,
+                pairDuplicatePenalty === 0 ? "ペア重複回避" : null,
+                opponentPenalty === 0 ? "対戦重複回避" : null,
+                `レート差${rateDiffPenalty}`,
+              ].filter(Boolean);
+
               best = {
                 teamA,
                 teamB,
@@ -213,6 +221,7 @@ function makeBestGame(
                 opponentKeys: opponentPairs,
                 relationshipKeys: allCourtPairs,
                 courtGroupKey: currentGroupKey,
+                matchReasons,
                 score,
               };
             }
@@ -365,7 +374,7 @@ function normalizeCircleId(value) {
 }
 
 function getCircledNumber(number) {
-  const circledNumbers = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧"];
+  const circledNumbers = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"];
   return circledNumbers[number - 1] || String(number);
 }
 const layoutOptions = {
@@ -829,7 +838,7 @@ function getStableCourtGameId(groupId, courtIndex, court) {
 const PROCESSING_GUIDE_MESSAGES = [
   "参加中や休憩中のメンバーをタップすると、メンバー同士を入れ替えられます。",
   "「コート入れ替え」を押すと、試合ごと別のコートへ移動できます。",
-  "試合中の「組みなおし」を押すと、そのコートの組み合わせを作り直せます。",
+  "試合中の「組直」を押すと、そのコートの組み合わせを作り直せます。",
   "勝ったペアの「勝ち」を押して「確定」すると、試合結果とレートが反映されます。",
   "「参加回数変更」から、メンバーごとの参加回数を調整できます。",
 ];
@@ -953,6 +962,18 @@ export default function App() {
   const [courtUndoStates, setCourtUndoStates] = useState({});
   const [processingTipIndex, setProcessingTipIndex] = useState(0);
   const [undoingCourtKey, setUndoingCourtKey] = useState("");
+  const [networkOnline, setNetworkOnline] = useState(() =>
+    typeof navigator === "undefined" ? true : navigator.onLine
+  );
+  const [openReasonCourtKey, setOpenReasonCourtKey] = useState("");
+  const [adminMemberSearch, setAdminMemberSearch] = useState("");
+  const [operationHistoryItems, setOperationHistoryItems] = useState([]);
+  const [operationHistoryLoading, setOperationHistoryLoading] = useState(false);
+  const [operationHistoryError, setOperationHistoryError] = useState("");
+  const [backupRestoreStatus, setBackupRestoreStatus] = useState("");
+  const backupFileInputRef = useRef(null);
+  const [isLegacyLayoutModalOpen, setIsLegacyLayoutModalOpen] = useState(false);
+  const [legacyShapeId, setLegacyShapeId] = useState("");
 
 
   const [isAdminSettingsOpen, setIsAdminSettingsOpen] = useState(false);
@@ -1031,6 +1052,19 @@ export default function App() {
 
     return () => window.clearInterval(timer);
   }, [hasConfirmingCourt]);
+
+  useEffect(() => {
+    const handleOnline = () => setNetworkOnline(true);
+    const handleOffline = () => setNetworkOnline(false);
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
 
   useEffect(() => {
     if (!currentCircle?.circleId) return;
@@ -1511,8 +1545,10 @@ export default function App() {
       setLastSyncTime(formatSyncTime());
       setLastOperationDevice(deviceTypeRef.current);
       setLastOperationTime(formatOperationTime(operationTimeMillis));
-      setSyncMessage(options.successMessage || "保存・同期しました");
+      const successMessage = options.successMessage || "保存・同期しました";
+      setSyncMessage(successMessage);
       setAutoSyncStatus("自動同期中");
+      writeOperationLog("同期保存", successMessage);
       return true;
     } catch (error) {
       console.error("同期保存失敗", error);
@@ -1916,6 +1952,31 @@ export default function App() {
     });
   }, [sortedMembers, viewerMemberSearch]);
 
+  const filteredAdminMembers = useMemo(() => {
+    const keyword = adminMemberSearch.trim();
+
+    if (!keyword) return sortedMembers;
+
+    return sortedMembers.filter((member) => {
+      const nickname = member.nickname || member.name || "";
+      const reading = member.reading || "";
+      return nickname.includes(keyword) || reading.includes(keyword);
+    });
+  }, [sortedMembers, adminMemberSearch]);
+
+  const syncHealth = useMemo(() => {
+    if (!networkOnline) return { label: "オフライン", tone: "offline" };
+    if (isSyncSaving) return { label: "通信中", tone: "working" };
+
+    const hasError =
+      /エラー|失敗/.test(autoSyncStatus || "") ||
+      /失敗/.test(syncMessage || "");
+
+    if (hasError) return { label: "同期失敗", tone: "error" };
+    if (lastSyncTime) return { label: "同期済み", tone: "ok" };
+    return { label: "確認中", tone: "working" };
+  }, [networkOnline, isSyncSaving, autoSyncStatus, syncMessage, lastSyncTime]);
+
   const selectedLayout = useMemo(() => {
     return getGymShapeForGroup(activeGroup);
   }, [activeGroup]);
@@ -2171,6 +2232,294 @@ export default function App() {
     await saveGroupsToFirestore(nextGroups, nextActiveGroupId);
   };
 
+  const writeOperationLog = async (action, detail = "") => {
+    if (!currentCircle?.circleId) return;
+
+    try {
+      const now = Date.now();
+      const logId = `${now}-${Math.random().toString(36).slice(2, 9)}`;
+      await setDoc(
+        doc(db, "circles", currentCircle.circleId, "operationLogs", logId),
+        {
+          action,
+          detail,
+          mode: isViewerMode ? "viewer" : adminUnlocked ? "admin" : "normal",
+          device: deviceTypeRef.current,
+          clientId: syncClientIdRef.current,
+          createdAtMillis: now,
+          createdAt: serverTimestamp(),
+        }
+      );
+    } catch (error) {
+      console.error("操作履歴保存失敗", error);
+    }
+  };
+
+  const loadOperationHistory = async () => {
+    if (!currentCircle?.circleId) return;
+
+    setOperationHistoryLoading(true);
+    setOperationHistoryError("");
+
+    try {
+      const snapshot = await getDocsFromServer(
+        collection(db, "circles", currentCircle.circleId, "operationLogs")
+      );
+
+      const items = snapshot.docs
+        .map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() }))
+        .sort(
+          (a, b) =>
+            Number(b.createdAtMillis || 0) - Number(a.createdAtMillis || 0)
+        )
+        .slice(0, 100);
+
+      setOperationHistoryItems(items);
+    } catch (error) {
+      console.error("操作履歴読み込み失敗", error);
+      setOperationHistoryError("操作履歴を読み込めませんでした。");
+    } finally {
+      setOperationHistoryLoading(false);
+    }
+  };
+
+  const exportBackup = () => {
+    if (!currentCircle) return;
+
+    const cleanMembers = members.map((member) => ({
+      id: member.id,
+      nickname: member.nickname || member.name || "",
+      name: member.name || member.nickname || "",
+      reading: member.reading || "",
+      gender: member.gender || "",
+      rank: member.rank || "",
+      rate: getMemberRate(member),
+    }));
+
+    const payload = {
+      backupType: "badminton-combination-app",
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      circleId: currentCircle.circleId,
+      settings: {
+        circleName: currentCircle.circleName || "",
+        defaultRateDisplay: currentCircle.defaultRateDisplay || "あり",
+        defaultReadingDisplay: currentCircle.defaultReadingDisplay || "なし",
+        rateChangeBase,
+        rankInitialRates,
+        rateProfiles,
+      },
+      members: cleanMembers,
+      groups: clonePlainData(groups),
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const dateText = new Date().toISOString().slice(0, 10);
+    link.href = url;
+    link.download = `badminton_backup_${currentCircle.circleId}_${dateText}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+
+    setBackupRestoreStatus("バックアップを書き出しました");
+    writeOperationLog("バックアップ作成", "メンバー・レート・設定・グループ状態");
+  };
+
+  const restoreBackupFromFile = async (file) => {
+    if (!currentCircle || !file) return;
+
+    try {
+      setBackupRestoreStatus("バックアップを確認中…");
+      const rawText = await file.text();
+      const backup = JSON.parse(rawText);
+
+      if (
+        backup?.backupType !== "badminton-combination-app" ||
+        !Array.isArray(backup.members) ||
+        !Array.isArray(backup.groups)
+      ) {
+        throw new Error("バックアップ形式が違います");
+      }
+
+      if (backup.circleId !== currentCircle.circleId) {
+        throw new Error("別のサークルのバックアップです");
+      }
+
+      const ok = window.confirm(
+        "バックアップを復元します。\n\n現在のメンバー・レート・設定・グループ状態を、バックアップ時点の内容へ置き換えます。\nこの操作は元に戻せません。\n\n続けますか？"
+      );
+      if (!ok) {
+        setBackupRestoreStatus("復元をキャンセルしました");
+        return;
+      }
+
+      const secondOk = window.confirm(
+        "最終確認です。現在の状態を上書きして復元しますか？"
+      );
+      if (!secondOk) {
+        setBackupRestoreStatus("復元をキャンセルしました");
+        return;
+      }
+
+      setBackupRestoreStatus("復元中…");
+
+      const memberRef = collection(
+        db,
+        "circles",
+        currentCircle.circleId,
+        "members"
+      );
+      const existingSnapshot = await getDocsFromServer(memberRef);
+      const backupIds = new Set(backup.members.map((member) => String(member.id)));
+
+      await Promise.all(
+        existingSnapshot.docs
+          .filter((itemDoc) => !backupIds.has(itemDoc.id))
+          .map((itemDoc) => deleteDoc(itemDoc.ref))
+      );
+
+      await Promise.all(
+        backup.members.map((member) =>
+          setDoc(
+            doc(
+              db,
+              "circles",
+              currentCircle.circleId,
+              "members",
+              String(member.id)
+            ),
+            {
+              nickname: member.nickname || member.name || "",
+              name: member.name || member.nickname || "",
+              reading: member.reading || "",
+              gender: member.gender || "",
+              rank: member.rank || "",
+              rate: Number(member.rate) || 3000,
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          )
+        )
+      );
+
+      const nextSettings = backup.settings || {};
+      await setDoc(
+        doc(db, "circles", currentCircle.circleId),
+        {
+          circleName: nextSettings.circleName || currentCircle.circleName || "",
+          defaultRateDisplay:
+            nextSettings.defaultRateDisplay ||
+            currentCircle.defaultRateDisplay ||
+            "あり",
+          defaultReadingDisplay:
+            nextSettings.defaultReadingDisplay ||
+            currentCircle.defaultReadingDisplay ||
+            "なし",
+          rateChangeBase:
+            Number(nextSettings.rateChangeBase) || DEFAULT_RATE_CHANGE_BASE,
+          rankInitialRates:
+            nextSettings.rankInitialRates || DEFAULT_RANK_INITIAL_RATES,
+          rateProfiles: nextSettings.rateProfiles || DEFAULT_RATE_PROFILES,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      const nextGroups = clonePlainData(backup.groups);
+      setGroups(nextGroups);
+      const nextActiveGroupId = nextGroups[0]?.id || null;
+      setActiveGroupId(nextActiveGroupId);
+      setScreen(nextGroups.length > 0 ? "main" : "home");
+      await saveGroupsToFirestore(nextGroups, nextActiveGroupId, {
+        successMessage: "バックアップを復元しました",
+      });
+
+      setRateChangeBase(
+        Number(nextSettings.rateChangeBase) || DEFAULT_RATE_CHANGE_BASE
+      );
+      setRankInitialRates(
+        nextSettings.rankInitialRates || DEFAULT_RANK_INITIAL_RATES
+      );
+      setRateProfiles(nextSettings.rateProfiles || DEFAULT_RATE_PROFILES);
+
+      await refreshMembersFromServer(currentCircle.circleId);
+      setBackupRestoreStatus("バックアップを復元しました");
+      writeOperationLog("バックアップ復元", file.name || "バックアップファイル");
+    } catch (error) {
+      console.error("バックアップ復元失敗", error);
+      setBackupRestoreStatus(
+        error?.message || "バックアップの復元に失敗しました"
+      );
+    } finally {
+      if (backupFileInputRef.current) {
+        backupFileInputRef.current.value = "";
+      }
+    }
+  };
+
+  const openLegacyLayoutMigration = () => {
+    if (!activeGroup || activeGroup.gymShapeId) return;
+
+    const currentCourtCount = Math.max(
+      1,
+      Number(activeGroup.courtCount) || activeGroup.courts?.length || 1
+    );
+    setLegacyShapeId(getDefaultGymShapeIdForCourtCount(currentCourtCount));
+    setIsLegacyLayoutModalOpen(true);
+  };
+
+  const applyLegacyLayoutMigration = async () => {
+    if (!activeGroup || !legacyShapeId) return;
+
+    const shape = getGymShapeById(legacyShapeId);
+    if (!shape) return;
+
+    const currentCourtCount = Math.max(
+      1,
+      Number(activeGroup.courtCount) || activeGroup.courts?.length || 1
+    );
+
+    if (shape.totalCourts < currentCourtCount) {
+      alert("現在のコート数より小さい体育館形状は選べません");
+      return;
+    }
+
+    const nextActiveSlots = Array.from(
+      { length: currentCourtCount },
+      (_, index) => index
+    );
+    const nextCourts = Array.from(
+      { length: shape.totalCourts },
+      (_, index) => activeGroup.courts?.[index] || null
+    );
+
+    const nextGroups = groups.map((group) =>
+      group.id === activeGroupId
+        ? {
+            ...group,
+            gymShapeId: shape.id,
+            gymTotalCourtSlots: shape.totalCourts,
+            activeCourtSlots: nextActiveSlots,
+            courtCount: String(nextActiveSlots.length),
+            layoutId: `gym-${shape.id}`,
+            courts: nextCourts,
+          }
+        : group
+    );
+
+    setGroups(nextGroups);
+    setIsLegacyLayoutModalOpen(false);
+    await saveGroupsToFirestore(nextGroups, activeGroupId, {
+      successMessage: "旧グループを新しい体育館レイアウトへ変換しました",
+    });
+    writeOperationLog("体育館レイアウト変換", `${activeGroup.groupName} → ${shape.label}`);
+  };
+
   const getGameResultDocRef = (circleId, gameId) => {
     return doc(db, "circles", circleId, "gameResults", gameId);
   };
@@ -2237,6 +2586,9 @@ export default function App() {
     setAdminUnlocked(false);
     setAdminError("");
     setRateHistoryError("");
+    setOperationHistoryError("");
+    setAdminMemberSearch("");
+    setBackupRestoreStatus("");
     setAdminPanel("menu");
     setAdminSettingsForm({
       circleName: currentCircle?.circleName || "",
@@ -2448,6 +2800,12 @@ export default function App() {
 
     if (!ok) return;
 
+    const finalOk = window.confirm(
+      "最終確認です。削除したメンバーは元に戻せません。削除しますか？"
+    );
+
+    if (!finalOk) return;
+
     try {
       await deleteDoc(
         doc(db, "circles", currentCircle.circleId, "members", selectedAdminMember.id)
@@ -2458,6 +2816,7 @@ export default function App() {
       );
 
       setSyncMessage("メンバーを削除しました");
+      writeOperationLog("メンバー削除", selectedAdminMember.nickname || selectedAdminMember.name || selectedAdminMember.id);
       closeAdminMemberEdit();
     } catch (error) {
       setAdminMemberEditError("削除に失敗しました");
@@ -2468,10 +2827,16 @@ export default function App() {
     if (!currentCircle) return;
 
     const ok = window.confirm(
-      "全メンバーのレートをランク初期値へ戻します。\nランクは保持されます。"
+      "全メンバーのレートをランク初期値へ戻します。\nランクは保持されます。\n\nこの操作は全員に影響します。"
     );
 
     if (!ok) return;
+
+    const finalOk = window.confirm(
+      "最終確認です。全メンバーのレートを初期化しますか？"
+    );
+
+    if (!finalOk) return;
 
     try {
       const nextMembers = members.map((member) => ({
@@ -2495,6 +2860,7 @@ export default function App() {
 
       setMembers(nextMembers);
       setSyncMessage("全員のレートを初期化しました");
+      writeOperationLog("レート初期化", `${nextMembers.length}人`);
     } catch (error) {
       alert("レート初期化に失敗しました");
     }
@@ -2623,6 +2989,12 @@ export default function App() {
       );
 
       if (!confirmReset) return;
+
+      const finalReset = window.confirm(
+        "最終確認です。今日の参加状況・コート状況・参加回数・試合履歴をリセットしますか？"
+      );
+
+      if (!finalReset) return;
     }
 
     const nextGroups = [];
@@ -3469,7 +3841,7 @@ export default function App() {
 
     const saved = await saveGroupsToFirestore(nextGroups, activeGroupId, {
       successMessage: wasRebuild
-        ? `コート${getCircledNumber(index + 1)}を組みなおしました`
+        ? `コート${getCircledNumber(index + 1)}を組直しました`
         : `コート${getCircledNumber(index + 1)}に新しい組み合わせを作成しました`,
     });
 
@@ -3482,7 +3854,7 @@ export default function App() {
           courtIndex: index,
           revision: latestSyncVersionRef.current,
           beforeGroup: beforeGroupSnapshot,
-          label: wasRebuild ? "組みなおし" : "新規",
+          label: wasRebuild ? "組直" : "新規",
         },
       }));
     }
@@ -3740,6 +4112,14 @@ export default function App() {
           winner: confirmedWinner,
           rateMove,
           memberChanges: historyChanges,
+          teamA: serverCourt.teamA.map((member) => ({
+            memberId: member.id,
+            nickname: member.nickname || member.name || "",
+          })),
+          teamB: serverCourt.teamB.map((member) => ({
+            memberId: member.id,
+            nickname: member.nickname || member.name || "",
+          })),
           confirmedDevice: deviceTypeRef.current,
           confirmedBy: syncClientIdRef.current,
           confirmedAtMillis,
@@ -5081,6 +5461,20 @@ export default function App() {
                       {isUndoingThisCourt ? "戻しています…" : "戻す"}
                     </button>
                   )}
+
+                  {Array.isArray(court.matchReasons) && court.matchReasons.length > 0 && (
+                    <button
+                      className="courtReasonButton"
+                      onClick={() => {
+                        const reasonKey = `${activeGroupId}-${index}`;
+                        setOpenReasonCourtKey((prev) =>
+                          prev === reasonKey ? "" : reasonKey
+                        );
+                      }}
+                    >
+                      理由
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -5107,6 +5501,14 @@ export default function App() {
                 </button>
               )}
             </div>
+
+            {openReasonCourtKey === `${activeGroupId}-${index}` &&
+              Array.isArray(court.matchReasons) &&
+              court.matchReasons.length > 0 && (
+                <div className="matchReasonPanel">
+                  {court.matchReasons.join("・")}
+                </div>
+              )}
           </div>
         ) : (
           <div className="emptyCourt">
@@ -5780,8 +6182,6 @@ export default function App() {
           レート表示ON/OFFやメンバーの削除は管理者設定から行えます
         </p>
 
-        {renderTabs()}
-
       <div className="mainTitleRow">
         <h1>{activeGroup.groupName}</h1>
 
@@ -5834,6 +6234,15 @@ export default function App() {
             >
               {isCourtSwapMode ? "入れ替えを終了" : "コート入れ替え"}
             </button>
+
+            {!activeGroup.gymShapeId && (
+              <button
+                className="legacyLayoutButton"
+                onClick={openLegacyLayoutMigration}
+              >
+                体育館形状を設定
+              </button>
+            )}
           </div>
         )}
 
@@ -5860,6 +6269,9 @@ export default function App() {
           >
             {isSyncSaving ? "保存中..." : "同期"}
           </button>
+          <span className={`syncHealthBadge syncHealth-${syncHealth.tone}`}>
+            {syncHealth.label}
+          </span>
           <span className="syncStatus">
             {lastSyncTime ? `最終同期：${lastSyncTime}` : "未同期"}
           </span>
@@ -5898,6 +6310,10 @@ export default function App() {
           </div>
         </section>
       )}
+
+      <div className="courtGroupTabsAbove">
+        {renderTabs()}
+      </div>
 
       {shouldShowRotateMessage && (
         <p className="rotateScreenHint">
@@ -6201,7 +6617,25 @@ export default function App() {
                           loadRateHistory();
                         }}
                       >
-                        レート変更履歴
+                        試合履歴
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setAdminPanel("backup");
+                          setBackupRestoreStatus("");
+                        }}
+                      >
+                        バックアップ・復元
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setAdminPanel("operationHistory");
+                          loadOperationHistory();
+                        }}
+                      >
+                        操作履歴
                       </button>
 
                       <button
@@ -6549,9 +6983,9 @@ export default function App() {
 
                 {adminPanel === "rateHistory" && (
                   <>
-                    <h3>レート変更履歴</h3>
+                    <h3>試合履歴</h3>
                     <p className="adminSmallNote">
-                      直近50試合の確定履歴です。同じ試合IDは1回だけレートへ反映されます。取り消した確定は「取消済み」と表示されます。
+                      直近50試合の履歴です。勝敗・対戦メンバー・レート変動を確認できます。取り消した確定は「取消済み」と表示されます。
                     </p>
 
                     <button
@@ -6559,7 +6993,7 @@ export default function App() {
                       onClick={loadRateHistory}
                       disabled={rateHistoryLoading}
                     >
-                      {rateHistoryLoading ? "読み込み中…" : "履歴を再読み込み"}
+                      {rateHistoryLoading ? "読み込み中…" : "試合履歴を再読み込み"}
                     </button>
 
                     {rateHistoryError && (
@@ -6594,6 +7028,22 @@ export default function App() {
                             {item.confirmedDevice
                               ? ` / ${item.confirmedDevice}`
                               : ""}
+                          </div>
+                          <div className="matchHistoryTeams">
+                            <div>
+                              <strong>勝ち：</strong>
+                              {(item.memberChanges || [])
+                                .filter((change) => change.result === "win")
+                                .map((change) => change.nickname || change.memberId)
+                                .join("・") || "-"}
+                            </div>
+                            <div>
+                              <strong>負け：</strong>
+                              {(item.memberChanges || [])
+                                .filter((change) => change.result === "lose")
+                                .map((change) => change.nickname || change.memberId)
+                                .join("・") || "-"}
+                            </div>
                           </div>
                           <div className="rateHistoryGameId">
                             試合ID：{item.gameId || item.id}
@@ -6632,6 +7082,98 @@ export default function App() {
                   </>
                 )}
 
+                {adminPanel === "backup" && (
+                  <>
+                    <h3>バックアップ・復元</h3>
+                    <p className="adminSmallNote">
+                      メンバー・レート・設定・現在のグループ状態をJSONファイルへ保存できます。
+                    </p>
+
+                    <div className="backupActionGrid">
+                      <button onClick={exportBackup}>バックアップを保存</button>
+                      <button
+                        className="subButton"
+                        onClick={() => backupFileInputRef.current?.click()}
+                      >
+                        バックアップから復元
+                      </button>
+                    </div>
+
+                    <input
+                      ref={backupFileInputRef}
+                      type="file"
+                      accept="application/json,.json"
+                      className="hiddenBackupInput"
+                      onChange={(e) => restoreBackupFromFile(e.target.files?.[0])}
+                    />
+
+                    {backupRestoreStatus && (
+                      <p className="backupRestoreStatus">{backupRestoreStatus}</p>
+                    )}
+
+                    <p className="adminSmallNote warningNote">
+                      復元は現在の状態を上書きします。復元前にもバックアップを保存しておくと安全です。
+                    </p>
+
+                    <div className="bottomActions">
+                      <button className="subButton" onClick={() => setAdminPanel("menu")}>
+                        戻る
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {adminPanel === "operationHistory" && (
+                  <>
+                    <h3>操作履歴</h3>
+                    <p className="adminSmallNote">
+                      この機能追加後に記録された操作を、端末・モードと一緒に表示します。
+                    </p>
+
+                    <button
+                      className="rateHistoryReloadButton"
+                      onClick={loadOperationHistory}
+                      disabled={operationHistoryLoading}
+                    >
+                      {operationHistoryLoading ? "読み込み中…" : "操作履歴を再読み込み"}
+                    </button>
+
+                    {operationHistoryError && (
+                      <p className="errorText centerText">{operationHistoryError}</p>
+                    )}
+
+                    <div className="operationHistoryList">
+                      {operationHistoryItems.map((item) => (
+                        <div key={item.id} className="operationHistoryCard">
+                          <div className="operationHistoryHeader">
+                            <strong>{item.action || "操作"}</strong>
+                            <span>{item.device || "端末不明"}</span>
+                          </div>
+                          {item.detail && <div className="operationHistoryDetail">{item.detail}</div>}
+                          <div className="operationHistoryMeta">
+                            {item.createdAtMillis
+                              ? new Date(item.createdAtMillis).toLocaleString("ja-JP")
+                              : "日時不明"}
+                            {item.mode ? ` / ${item.mode}` : ""}
+                          </div>
+                        </div>
+                      ))}
+
+                      {!operationHistoryLoading &&
+                        operationHistoryItems.length === 0 &&
+                        !operationHistoryError && (
+                          <p className="adminSmallNote">まだ操作履歴はありません。</p>
+                        )}
+                    </div>
+
+                    <div className="bottomActions">
+                      <button className="subButton" onClick={() => setAdminPanel("menu")}>
+                        戻る
+                      </button>
+                    </div>
+                  </>
+                )}
+
 {adminPanel === "member" && (
                   <>
                     <h3>メンバー編集・削除・レート変更</h3>
@@ -6640,8 +7182,14 @@ export default function App() {
                       メンバーを選ぶと、名前・読み方・性別・ランク・レートを変更できます。
                     </p>
 
+                    <input
+                      value={adminMemberSearch}
+                      onChange={(e) => setAdminMemberSearch(e.target.value)}
+                      placeholder="検索：名前・読み方"
+                    />
+
                     {renderGroupedMemberList({
-                      membersForList: sortedMembers,
+                      membersForList: filteredAdminMembers,
                       refs: adminGroupRefs,
                       renderMember: (member) => (
                         <button
@@ -6861,6 +7409,54 @@ export default function App() {
                   setLayoutChangeMode(null);
                   setPendingCourtCount("");
                 }}
+              >
+                キャンセル
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isLegacyLayoutModalOpen && activeGroup && !activeGroup.gymShapeId && (
+        <div className="modalOverlay">
+          <div className="modal legacyLayoutModal">
+            <h2>体育館形状を設定</h2>
+            <p className="adminSmallNote">
+              旧形式のグループを新しい体育館レイアウトへ変換します。現在の試合・参加状況は保持します。
+            </p>
+
+            <div className="gymShapeOptionGrid legacyShapeOptionGrid">
+              {gymShapeOptions
+                .filter((shape) =>
+                  shape.totalCourts >=
+                  Math.max(
+                    1,
+                    Number(activeGroup.courtCount) || activeGroup.courts?.length || 1
+                  )
+                )
+                .map((shape) => (
+                  <button
+                    key={`legacy-${shape.id}`}
+                    className={
+                      legacyShapeId === shape.id
+                        ? "gymShapeOption selectedGymShapeOption"
+                        : "gymShapeOption"
+                    }
+                    onClick={() => setLegacyShapeId(shape.id)}
+                  >
+                    <strong>{shape.label}</strong>
+                    <MiniLayout layout={shape} />
+                  </button>
+                ))}
+            </div>
+
+            <div className="bottomActions">
+              <button onClick={applyLegacyLayoutMigration} disabled={!legacyShapeId}>
+                この形に変換
+              </button>
+              <button
+                className="subButton"
+                onClick={() => setIsLegacyLayoutModalOpen(false)}
               >
                 キャンセル
               </button>

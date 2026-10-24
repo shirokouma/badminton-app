@@ -234,6 +234,213 @@ function makeBestGame(
   return best;
 }
 
+function pickClosestRateMembers(members, playCounts) {
+  if (!Array.isArray(members) || members.length < 4) return [];
+
+  const sorted = [...members].sort((a, b) => {
+    const rateDiff = getMemberRate(a) - getMemberRate(b);
+    if (rateDiff !== 0) return rateDiff;
+    return (playCounts[a.id] || 0) - (playCounts[b.id] || 0);
+  });
+
+  let bestWindow = null;
+
+  for (let i = 0; i <= sorted.length - 4; i += 1) {
+    const group = sorted.slice(i, i + 4);
+    const rates = group.map((member) => getMemberRate(member));
+    const rateRange = Math.max(...rates) - Math.min(...rates);
+    const totalPlayCount = group.reduce(
+      (sum, member) => sum + (playCounts[member.id] || 0),
+      0
+    );
+    const maxPlayCount = Math.max(
+      ...group.map((member) => playCounts[member.id] || 0)
+    );
+
+    const candidate = {
+      group,
+      rateRange,
+      totalPlayCount,
+      maxPlayCount,
+      random: Math.random(),
+    };
+
+    if (
+      !bestWindow ||
+      candidate.rateRange < bestWindow.rateRange ||
+      (candidate.rateRange === bestWindow.rateRange &&
+        candidate.maxPlayCount < bestWindow.maxPlayCount) ||
+      (candidate.rateRange === bestWindow.rateRange &&
+        candidate.maxPlayCount === bestWindow.maxPlayCount &&
+        candidate.totalPlayCount < bestWindow.totalPlayCount) ||
+      (candidate.rateRange === bestWindow.rateRange &&
+        candidate.maxPlayCount === bestWindow.maxPlayCount &&
+        candidate.totalPlayCount === bestWindow.totalPlayCount &&
+        candidate.random < bestWindow.random)
+    ) {
+      bestWindow = candidate;
+    }
+  }
+
+  return bestWindow?.group || [];
+}
+
+function makeBestMixedGame(
+  waitingMembers,
+  pairHistory,
+  opponentHistory,
+  relationshipHistory,
+  courtGroupHistory,
+  playCounts,
+  playCountSpreadLimit = 2
+) {
+  const males = waitingMembers.filter((member) => member.gender === "男");
+  const females = waitingMembers.filter((member) => member.gender === "女");
+
+  if (males.length < 2 || females.length < 2) return null;
+
+  const sortByPlayCount = (members) =>
+    shuffle(members).sort(
+      (a, b) => (playCounts[a.id] || 0) - (playCounts[b.id] || 0)
+    );
+
+  const maleCandidates = sortByPlayCount(males).slice(0, 12);
+  const femaleCandidates = sortByPlayCount(females).slice(0, 12);
+
+  const zeroMaleCount = males.filter(
+    (member) => (playCounts[member.id] || 0) === 0
+  ).length;
+  const zeroFemaleCount = females.filter(
+    (member) => (playCounts[member.id] || 0) === 0
+  ).length;
+  const mustZeroCount = Math.min(2, zeroMaleCount) + Math.min(2, zeroFemaleCount);
+  const lowestPlayCount = Math.min(
+    ...waitingMembers.map((member) => playCounts[member.id] || 0)
+  );
+
+  let best = null;
+
+  for (let mi = 0; mi < maleCandidates.length; mi += 1) {
+    for (let mj = mi + 1; mj < maleCandidates.length; mj += 1) {
+      for (let fi = 0; fi < femaleCandidates.length; fi += 1) {
+        for (let fj = fi + 1; fj < femaleCandidates.length; fj += 1) {
+          const maleA = maleCandidates[mi];
+          const maleB = maleCandidates[mj];
+          const femaleA = femaleCandidates[fi];
+          const femaleB = femaleCandidates[fj];
+          const group = [maleA, maleB, femaleA, femaleB];
+
+          const patterns = [
+            [
+              [maleA, femaleA],
+              [maleB, femaleB],
+            ],
+            [
+              [maleA, femaleB],
+              [maleB, femaleA],
+            ],
+          ];
+
+          for (const [teamA, teamB] of patterns) {
+            const keyA = pairKey(teamA[0], teamA[1]);
+            const keyB = pairKey(teamB[0], teamB[1]);
+            const currentGroupKey = groupKey(group);
+            const groupPlayCounts = group.map(
+              (member) => playCounts[member.id] || 0
+            );
+            const groupMaxPlayCount = Math.max(...groupPlayCounts);
+            const groupMinPlayCount = Math.min(...groupPlayCounts);
+            const groupZeroCount = group.filter(
+              (member) => (playCounts[member.id] || 0) === 0
+            ).length;
+
+            const zeroPlayPenalty = Math.max(0, mustZeroCount - groupZeroCount);
+            const lowPlayPriorityPenalty = group.reduce(
+              (sum, member) =>
+                sum + Math.max(0, (playCounts[member.id] || 0) - lowestPlayCount),
+              0
+            );
+            const normalizedPlayCountSpreadLimit =
+              playCountSpreadLimit === "none"
+                ? 999
+                : Number(playCountSpreadLimit) || 2;
+            const playCountSpreadPenalty = Math.max(
+              0,
+              groupMaxPlayCount -
+                groupMinPlayCount -
+                normalizedPlayCountSpreadLimit
+            );
+
+            const allCourtPairs = getAllPairs(group);
+            const relationshipPenalty = allCourtPairs.reduce(
+              (sum, key) => sum + (relationshipHistory[key] || 0),
+              0
+            );
+            const courtGroupPenalty = courtGroupHistory[currentGroupKey] || 0;
+            const pairDuplicatePenalty =
+              (pairHistory[keyA] || 0) + (pairHistory[keyB] || 0);
+            const opponentPairs = [
+              pairKey(teamA[0], teamB[0]),
+              pairKey(teamA[0], teamB[1]),
+              pairKey(teamA[1], teamB[0]),
+              pairKey(teamA[1], teamB[1]),
+            ];
+            const opponentPenalty = opponentPairs.reduce(
+              (sum, key) => sum + (opponentHistory[key] || 0),
+              0
+            );
+            const teamARate = teamA.reduce(
+              (sum, member) => sum + getMemberRate(member),
+              0
+            );
+            const teamBRate = teamB.reduce(
+              (sum, member) => sum + getMemberRate(member),
+              0
+            );
+            const rateDiffPenalty = Math.abs(teamARate - teamBRate);
+            const rateBalancePenalty = rateDiffPenalty * 50;
+
+            const score =
+              zeroPlayPenalty * 10000000 +
+              lowPlayPriorityPenalty * 1000000 +
+              playCountSpreadPenalty * 500000 +
+              courtGroupPenalty * 300000 +
+              relationshipPenalty * 80000 +
+              rateBalancePenalty +
+              pairDuplicatePenalty * 10000 +
+              opponentPenalty * 5000 +
+              Math.random();
+
+            if (!best || score < best.score) {
+              const matchReasons = [
+                "ミックス",
+                groupZeroCount > 0 ? "初回参加優先" : "参加回数優先",
+                courtGroupPenalty === 0 ? "同じ4人回避" : null,
+                pairDuplicatePenalty === 0 ? "ペア重複回避" : null,
+                opponentPenalty === 0 ? "対戦重複回避" : null,
+                `レート差${rateDiffPenalty}`,
+              ].filter(Boolean);
+
+              best = {
+                teamA,
+                teamB,
+                pairKeys: [keyA, keyB],
+                opponentKeys: opponentPairs,
+                relationshipKeys: allCourtPairs,
+                courtGroupKey: currentGroupKey,
+                matchReasons,
+                score,
+              };
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return best;
+}
+
 const groupNameOptions = [
   "初級",
   "中級",
@@ -3760,7 +3967,7 @@ export default function App() {
     }
   };
 
-  const generateCourt = async (index) => {
+  const generateCourt = async (index, newGameMode = "normal") => {
     if (!activeGroup || isSyncSaving) return;
 
     const undoKey = getCourtUndoKey(activeGroupId, index);
@@ -3779,17 +3986,75 @@ export default function App() {
 
     if (availableMembers.length < 4) return;
 
-    const game = makeBestGame(
-      availableMembers,
-      pairHistory,
-      opponentHistory,
-      relationshipHistory,
-      courtGroupHistory,
-      playCounts,
-      playCountSpreadLimit
-    );
+    // 「組直」は従来どおり通常条件で組む。条件指定は空きコートの各ボタンだけ。
+    const effectiveMode = wasRebuild ? "normal" : newGameMode;
+    let candidateMembers = availableMembers;
+    let modeReason = "";
+
+    if (effectiveMode === "male") {
+      candidateMembers = availableMembers.filter((member) => member.gender === "男");
+      modeReason = "男子ダブルス";
+    } else if (effectiveMode === "female") {
+      candidateMembers = availableMembers.filter((member) => member.gender === "女");
+      modeReason = "女子ダブルス";
+    } else if (effectiveMode === "rateClose") {
+      candidateMembers = pickClosestRateMembers(availableMembers, playCounts);
+      modeReason = "レートが近い人";
+    } else if (effectiveMode === "mixed") {
+      modeReason = "ミックス";
+    }
+
+    const maleCount = availableMembers.filter(
+      (member) => member.gender === "男"
+    ).length;
+    const femaleCount = availableMembers.filter(
+      (member) => member.gender === "女"
+    ).length;
+
+    if (
+      (effectiveMode === "male" && maleCount < 4) ||
+      (effectiveMode === "female" && femaleCount < 4) ||
+      (effectiveMode === "mixed" && (maleCount < 2 || femaleCount < 2)) ||
+      (effectiveMode !== "mixed" && candidateMembers.length < 4)
+    ) {
+      const message =
+        effectiveMode === "male"
+          ? "待機中の男性が4人未満です。"
+          : effectiveMode === "female"
+          ? "待機中の女性が4人未満です。"
+          : effectiveMode === "mixed"
+          ? "ミックスには待機中の男性2人・女性2人が必要です。"
+          : "組み合わせを作るには待機中メンバーが4人必要です。";
+      window.alert(message);
+      return;
+    }
+
+    const game =
+      effectiveMode === "mixed"
+        ? makeBestMixedGame(
+            availableMembers,
+            pairHistory,
+            opponentHistory,
+            relationshipHistory,
+            courtGroupHistory,
+            playCounts,
+            playCountSpreadLimit
+          )
+        : makeBestGame(
+            candidateMembers,
+            pairHistory,
+            opponentHistory,
+            relationshipHistory,
+            courtGroupHistory,
+            playCounts,
+            playCountSpreadLimit
+          );
 
     if (!game) return;
+
+    if (modeReason && effectiveMode !== "mixed") {
+      game.matchReasons = [modeReason, ...(game.matchReasons || [])];
+    }
 
     const usedIds = new Set([...game.teamA, ...game.teamB].map((m) => m.id));
 
@@ -3839,10 +4104,21 @@ export default function App() {
 
     setGroups(nextGroups);
 
+    const modeLabel =
+      effectiveMode === "male"
+        ? "男子ダブルス"
+        : effectiveMode === "female"
+        ? "女子ダブルス"
+        : effectiveMode === "mixed"
+        ? "ミックス"
+        : effectiveMode === "rateClose"
+        ? "レートが近い人"
+        : "通常通り組む";
+
     const saved = await saveGroupsToFirestore(nextGroups, activeGroupId, {
       successMessage: wasRebuild
         ? `コート${getCircledNumber(index + 1)}を組直しました`
-        : `コート${getCircledNumber(index + 1)}に新しい組み合わせを作成しました`,
+        : `コート${getCircledNumber(index + 1)}に新しい組み合わせ（${modeLabel}）を作成しました`,
     });
 
     if (saved) {
@@ -3854,12 +4130,11 @@ export default function App() {
           courtIndex: index,
           revision: latestSyncVersionRef.current,
           beforeGroup: beforeGroupSnapshot,
-          label: wasRebuild ? "組直" : "新規",
+          label: wasRebuild ? "組直" : `新規（${modeLabel}）`,
         },
       }));
     }
   };
-
 
   const clearCourt = async (index) => {
     if (!courts[index]) return;
@@ -5515,12 +5790,65 @@ export default function App() {
             <span>空き</span>
             {!isViewerMode && (
               <div className="emptyCourtActions">
-                <button
-                  onClick={() => generateCourt(index)}
-                  disabled={isConfirming || isSyncSaving || isCourtSwapMode}
-                >
-                  新規
-                </button>
+                <div className="newGameDirectOptions">
+                  <button
+                    onClick={() => generateCourt(index, "normal")}
+                    disabled={
+                      isConfirming ||
+                      isSyncSaving ||
+                      isCourtSwapMode ||
+                      waitingMembers.length < 4
+                    }
+                  >
+                    通常通り組む
+                  </button>
+                  <button
+                    onClick={() => generateCourt(index, "male")}
+                    disabled={
+                      isConfirming ||
+                      isSyncSaving ||
+                      isCourtSwapMode ||
+                      waitingMembers.filter((member) => member.gender === "男").length < 4
+                    }
+                  >
+                    男子ダブルス
+                  </button>
+                  <button
+                    onClick={() => generateCourt(index, "female")}
+                    disabled={
+                      isConfirming ||
+                      isSyncSaving ||
+                      isCourtSwapMode ||
+                      waitingMembers.filter((member) => member.gender === "女").length < 4
+                    }
+                  >
+                    女子ダブルス
+                  </button>
+                  <button
+                    onClick={() => generateCourt(index, "mixed")}
+                    disabled={
+                      isConfirming ||
+                      isSyncSaving ||
+                      isCourtSwapMode ||
+                      waitingMembers.filter((member) => member.gender === "男").length < 2 ||
+                      waitingMembers.filter((member) => member.gender === "女").length < 2
+                    }
+                  >
+                    ミックス
+                  </button>
+                  <button
+                    className="newGameRateCloseButton"
+                    onClick={() => generateCourt(index, "rateClose")}
+                    disabled={
+                      isConfirming ||
+                      isSyncSaving ||
+                      isCourtSwapMode ||
+                      waitingMembers.length < 4
+                    }
+                  >
+                    レートが近い人
+                  </button>
+                </div>
                 {canUndoCourtAction && (
                   <button
                     className="courtUndoButton"
@@ -6423,6 +6751,8 @@ export default function App() {
           </div>
         </div>
       )}
+
+
 
       {isViewerGuideOpen && (
         <div className="modalOverlay">

@@ -2461,7 +2461,7 @@ div.authModeButton {
 
 .backupActionGrid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin: 14px 0;
 }
@@ -2543,5 +2543,39 @@ div.authModeButton {
 
   .courtGroupTabsAbove {
     margin-top: 6px;
+  }
+}
+
+
+/* 完成13追加：空きコートの組み方を5ボタンで直接選択 */
+.newGameDirectOptions {
+  width: min(100%, 320px);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.newGameDirectOptions button {
+  min-width: 0;
+  padding: 7px 6px;
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+
+.newGameDirectOptions button:disabled {
+  opacity: 0.42;
+}
+
+@media (max-width: 420px) {
+  .newGameDirectOptions {
+    width: min(100%, 280px);
+    gap: 5px;
+  }
+
+  .newGameDirectOptions button {
+    padding: 6px 4px;
+    font-size: 10px;
   }
 }

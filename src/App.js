@@ -528,6 +528,49 @@ function getKanaJumpGroupKey(member) {
   return group?.key || "他";
 }
 
+function getFairPlayCountPool(
+  members,
+  playCounts,
+  playCountSpreadLimit,
+  isEnough = (pool) => pool.length >= 4
+) {
+  const sourceMembers = Array.isArray(members) ? members : [];
+
+  if (sourceMembers.length === 0) {
+    return { members: [], effectiveLimit: null, relaxed: false };
+  }
+
+  if (playCountSpreadLimit === "none") {
+    return { members: sourceMembers, effectiveLimit: null, relaxed: false };
+  }
+
+  const configuredLimit = Math.max(0, Number(playCountSpreadLimit) || 0);
+  const counts = sourceMembers.map((member) => playCounts[member.id] || 0);
+  const minimumCount = Math.min(...counts);
+  const maximumCount = Math.max(...counts);
+  const maximumNeededLimit = Math.max(configuredLimit, maximumCount - minimumCount);
+
+  for (let allowedLimit = configuredLimit; allowedLimit <= maximumNeededLimit; allowedLimit += 1) {
+    const pool = sourceMembers.filter(
+      (member) => (playCounts[member.id] || 0) <= minimumCount + allowedLimit
+    );
+
+    if (isEnough(pool)) {
+      return {
+        members: pool,
+        effectiveLimit: allowedLimit,
+        relaxed: allowedLimit > configuredLimit,
+      };
+    }
+  }
+
+  return {
+    members: sourceMembers,
+    effectiveLimit: maximumNeededLimit,
+    relaxed: maximumNeededLimit > configuredLimit,
+  };
+}
+
 
 function getInitialRate(rank) {
   return rankRateMap[rank] || 3000;
@@ -1125,6 +1168,7 @@ export default function App() {
   const [tempSelectedIds, setTempSelectedIds] = useState([]);
   const [participationError, setParticipationError] = useState("");
   const [memberSearch, setMemberSearch] = useState("");
+  const [memberKanaFilter, setMemberKanaFilter] = useState("all");
   const [isNewMemberFormOpen, setIsNewMemberFormOpen] = useState(false);
   const [isImportMemberModalOpen, setIsImportMemberModalOpen] = useState(false);
   const [importCircleForm, setImportCircleForm] = useState({
@@ -1178,6 +1222,8 @@ export default function App() {
   const [operationHistoryLoading, setOperationHistoryLoading] = useState(false);
   const [operationHistoryError, setOperationHistoryError] = useState("");
   const [backupRestoreStatus, setBackupRestoreStatus] = useState("");
+  const [remoteUpdateNotice, setRemoteUpdateNotice] = useState(null);
+  const remoteUpdateNoticeTimerRef = useRef(null);
   const backupFileInputRef = useRef(null);
   const [isLegacyLayoutModalOpen, setIsLegacyLayoutModalOpen] = useState(false);
   const [legacyShapeId, setLegacyShapeId] = useState("");
@@ -1270,6 +1316,14 @@ export default function App() {
     return () => {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (remoteUpdateNoticeTimerRef.current) {
+        clearTimeout(remoteUpdateNoticeTimerRef.current);
+      }
     };
   }, []);
 
@@ -1603,11 +1657,34 @@ export default function App() {
     return 0;
   };
 
+  const showRemoteUpdateNotice = (deviceName) => {
+    if (remoteUpdateNoticeTimerRef.current) {
+      clearTimeout(remoteUpdateNoticeTimerRef.current);
+    }
+
+    setRemoteUpdateNotice({
+      device: deviceName || "他端末",
+      key: Date.now(),
+    });
+
+    remoteUpdateNoticeTimerRef.current = setTimeout(() => {
+      setRemoteUpdateNotice(null);
+      remoteUpdateNoticeTimerRef.current = null;
+    }, 200);
+  };
+
   const applyRemoteSyncData = (
     data,
     { message = "最新状態を反映しました", allowPracticePrompt = true } = {}
   ) => {
     const incomingRevision = getSyncRevision(data);
+    const previousRevision = latestSyncVersionRef.current;
+    const wasAlreadyInitialized = syncInitializedRef.current;
+    const isNewRemoteUpdate =
+      wasAlreadyInitialized &&
+      incomingRevision > previousRevision &&
+      Boolean(data?.updatedBy) &&
+      data.updatedBy !== syncClientIdRef.current;
     const loadedGroups = Array.isArray(data?.groups) ? data.groups : [];
     const loadedPracticeDate = data?.practiceDate || getPracticeDateKey();
     const todayPracticeDate = getPracticeDateKey();
@@ -1650,6 +1727,10 @@ export default function App() {
 
     setLastSyncTime(formatSyncTime());
     setSyncMessage(message);
+
+    if (isNewRemoteUpdate) {
+      showRemoteUpdateNotice(data?.updatedDevice || "他端末");
+    }
   };
 
   const applyPendingRemoteSyncIfNeeded = () => {
@@ -2224,16 +2305,20 @@ export default function App() {
   }, [courts]);
 
   const filteredMembers = useMemo(() => {
-    const keyword = memberSearch.trim();
-
-    if (!keyword) return sortedMembers;
+    const keyword = memberSearch.trim().toLocaleLowerCase();
 
     return sortedMembers.filter((member) => {
-      const nickname = member.nickname || member.name || "";
-      const reading = member.reading || "";
-      return nickname.includes(keyword) || reading.includes(keyword);
+      const nickname = (member.nickname || member.name || "").toLocaleLowerCase();
+      const reading = (member.reading || "").toLocaleLowerCase();
+      const matchesKeyword =
+        !keyword || nickname.includes(keyword) || reading.includes(keyword);
+      const matchesKana =
+        memberKanaFilter === "all" ||
+        getKanaJumpGroupKey(member) === memberKanaFilter;
+
+      return matchesKeyword && matchesKana;
     });
-  }, [sortedMembers, memberSearch]);
+  }, [sortedMembers, memberSearch, memberKanaFilter]);
 
   const activePlayCountMembers = useMemo(() => {
     return sortedMembers.filter((member) => selectedIds.has(member.id));
@@ -2390,6 +2475,10 @@ export default function App() {
         courtCount: String(nextActiveCourtSlots.length),
         courts: nextCourts,
         selectedSwap: null,
+        latestUpdatedCourtIndex:
+          layoutChangeMode === "delete" && group.latestUpdatedCourtIndex === slotIndex
+            ? null
+            : group.latestUpdatedCourtIndex,
       };
     });
 
@@ -2405,6 +2494,7 @@ export default function App() {
     setIsParticipationModalOpen(false);
     setTempSelectedIds([]);
     setMemberSearch("");
+    setMemberKanaFilter("all");
     setIsNewMemberFormOpen(false);
     setEditingMemberId(null);
     setEditDeleteError("");
@@ -3213,6 +3303,7 @@ export default function App() {
     setIsParticipationModalOpen(false);
     setTempSelectedIds([]);
     setMemberSearch("");
+    setMemberKanaFilter("all");
     setIsNewMemberFormOpen(false);
     setEditingMemberId(null);
     setIsEditSelectMode(false);
@@ -3362,6 +3453,7 @@ export default function App() {
 
     setTempSelectedIds(Array.from(ids));
     setMemberSearch("");
+    setMemberKanaFilter("all");
     setIsNewMemberFormOpen(false);
     setMemberForm(emptyMemberForm);
     setMemberFormError(false);
@@ -3947,10 +4039,18 @@ export default function App() {
     const nextGroups = groups.map((group) => {
       if (group.id !== activeGroupId) return group;
 
+      let nextLatestUpdatedCourtIndex = group.latestUpdatedCourtIndex;
+      if (nextLatestUpdatedCourtIndex === firstIndex) {
+        nextLatestUpdatedCourtIndex = index;
+      } else if (nextLatestUpdatedCourtIndex === index) {
+        nextLatestUpdatedCourtIndex = firstIndex;
+      }
+
       return {
         ...group,
         courts: nextCourts,
         selectedSwap: null,
+        latestUpdatedCourtIndex: nextLatestUpdatedCourtIndex,
       };
     });
 
@@ -3987,21 +4087,61 @@ export default function App() {
     if (availableMembers.length < 4) return;
 
     // 「組直」は従来どおり通常条件で組む。条件指定は空きコートの各ボタンだけ。
+    // すべての組み方で、まずグループ設定の「参加回数差」に収まる候補を優先し、
+    // 必要人数がそろわない時だけ差を1回ずつ段階的に緩める。
     const effectiveMode = wasRebuild ? "normal" : newGameMode;
+    let eligibleMembers = availableMembers;
     let candidateMembers = availableMembers;
     let modeReason = "";
+    let fairnessResult = null;
 
     if (effectiveMode === "male") {
-      candidateMembers = availableMembers.filter((member) => member.gender === "男");
+      eligibleMembers = availableMembers.filter((member) => member.gender === "男");
       modeReason = "男子ダブルス";
+      fairnessResult = getFairPlayCountPool(
+        eligibleMembers,
+        playCounts,
+        playCountSpreadLimit,
+        (pool) => pool.length >= 4
+      );
+      candidateMembers = fairnessResult.members;
     } else if (effectiveMode === "female") {
-      candidateMembers = availableMembers.filter((member) => member.gender === "女");
+      eligibleMembers = availableMembers.filter((member) => member.gender === "女");
       modeReason = "女子ダブルス";
-    } else if (effectiveMode === "rateClose") {
-      candidateMembers = pickClosestRateMembers(availableMembers, playCounts);
-      modeReason = "レートが近い人";
+      fairnessResult = getFairPlayCountPool(
+        eligibleMembers,
+        playCounts,
+        playCountSpreadLimit,
+        (pool) => pool.length >= 4
+      );
+      candidateMembers = fairnessResult.members;
     } else if (effectiveMode === "mixed") {
+      eligibleMembers = availableMembers.filter(
+        (member) => member.gender === "男" || member.gender === "女"
+      );
       modeReason = "ミックス";
+      fairnessResult = getFairPlayCountPool(
+        eligibleMembers,
+        playCounts,
+        playCountSpreadLimit,
+        (pool) =>
+          pool.filter((member) => member.gender === "男").length >= 2 &&
+          pool.filter((member) => member.gender === "女").length >= 2
+      );
+      candidateMembers = fairnessResult.members;
+    } else {
+      fairnessResult = getFairPlayCountPool(
+        availableMembers,
+        playCounts,
+        playCountSpreadLimit,
+        (pool) => pool.length >= 4
+      );
+      candidateMembers = fairnessResult.members;
+
+      if (effectiveMode === "rateClose") {
+        candidateMembers = pickClosestRateMembers(candidateMembers, playCounts);
+        modeReason = "レートが近い人";
+      }
     }
 
     const maleCount = availableMembers.filter(
@@ -4032,7 +4172,7 @@ export default function App() {
     const game =
       effectiveMode === "mixed"
         ? makeBestMixedGame(
-            availableMembers,
+            candidateMembers,
             pairHistory,
             opponentHistory,
             relationshipHistory,
@@ -4052,8 +4192,19 @@ export default function App() {
 
     if (!game) return;
 
+    const fairnessReason =
+      playCountSpreadLimit === "none"
+        ? null
+        : fairnessResult?.relaxed
+        ? `参加回数差を${fairnessResult.effectiveLimit}回まで緩和`
+        : `参加回数差${fairnessResult?.effectiveLimit ?? playCountSpreadLimit}回以内`;
+
     if (modeReason && effectiveMode !== "mixed") {
       game.matchReasons = [modeReason, ...(game.matchReasons || [])];
+    }
+
+    if (fairnessReason) {
+      game.matchReasons = [fairnessReason, ...(game.matchReasons || [])];
     }
 
     const usedIds = new Set([...game.teamA, ...game.teamB].map((m) => m.id));
@@ -4099,6 +4250,7 @@ export default function App() {
         relationshipHistory: nextRelationshipHistory,
         courtGroupHistory: nextCourtGroupHistory,
         selectedSwap: null,
+        latestUpdatedCourtIndex: index,
       };
     });
 
@@ -4151,6 +4303,10 @@ export default function App() {
         courts: newCourts,
         waitingMembers: [...waitingMembers, ...courtMembers],
         selectedSwap: null,
+        latestUpdatedCourtIndex:
+          group.latestUpdatedCourtIndex === index
+            ? null
+            : group.latestUpdatedCourtIndex,
       };
     });
 
@@ -5159,10 +5315,51 @@ export default function App() {
     );
   };
 
+  const renderKanaFilterBar = () => {
+    const existingKeys = new Set(sortedMembers.map(getKanaJumpGroupKey));
+
+    return (
+      <div className="kanaFilterBar">
+        <button
+          type="button"
+          className={
+            memberKanaFilter === "all"
+              ? "kanaFilterButton activeKanaFilterButton"
+              : "kanaFilterButton"
+          }
+          onClick={() => setMemberKanaFilter("all")}
+        >
+          全
+        </button>
+        {kanaJumpGroups.map((group) => {
+          const available = existingKeys.has(group.key);
+          return (
+            <button
+              key={`filter-${group.key}`}
+              type="button"
+              className={
+                memberKanaFilter === group.key
+                  ? "kanaFilterButton activeKanaFilterButton"
+                  : available
+                  ? "kanaFilterButton"
+                  : "kanaFilterButton disabledKanaFilterButton"
+              }
+              disabled={!available}
+              onClick={() => setMemberKanaFilter(group.key)}
+            >
+              {group.label}
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
   const renderGroupedMemberList = ({
     membersForList,
     refs,
     renderMember,
+    showKanaJump = true,
   }) => {
     const grouped = membersForList.reduce((acc, member) => {
       const key = getKanaJumpGroupKey(member);
@@ -5175,13 +5372,13 @@ export default function App() {
 
     return (
       <>
-        {renderKanaJumpBar(refs, membersForList)}
+        {showKanaJump && renderKanaJumpBar(refs, membersForList)}
 
         <div className="groupedMemberList">
           {kanaJumpGroups.map((group) => {
             const groupMembers = grouped[group.key] || [];
 
-            if (groupMembers.length === 0 && group.key !== "他") return null;
+            if (groupMembers.length === 0) return null;
 
             return (
               <div
@@ -5646,7 +5843,11 @@ export default function App() {
     return (
       <div
         key={index}
-        className={`courtVisual ${isSelectedForCourtSwap ? "courtSwapSelected" : ""}`}
+        className={`courtVisual ${
+          activeGroup?.latestUpdatedCourtIndex === index && court
+            ? "latestUpdatedCourt"
+            : ""
+        } ${isSelectedForCourtSwap ? "courtSwapSelected" : ""}`}
       >
         {!isViewerMode && isCourtSwapMode && (
           <button
@@ -5792,6 +5993,7 @@ export default function App() {
               <div className="emptyCourtActions">
                 <div className="newGameDirectOptions">
                   <button
+                    className="normalGamePrimaryButton"
                     onClick={() => generateCourt(index, "normal")}
                     disabled={
                       isConfirming ||
@@ -6728,6 +6930,18 @@ export default function App() {
         </div>
       </section>
 
+
+      {remoteUpdateNotice && (
+        <div
+          key={remoteUpdateNotice.key}
+          className="remoteUpdateFlash"
+          aria-live="polite"
+        >
+          <div className="remoteUpdateFlashText">
+            {remoteUpdateNotice.device}が更新しました
+          </div>
+        </div>
+      )}
 
       {renderPracticeDayPrompt()}
 
@@ -7806,9 +8020,11 @@ export default function App() {
               placeholder="検索：名前・読み方"
             />
 
-            <p className="participantCount">
-              選択中：{tempSelectedIds.length}人
+            <p className="participantCount participantCountEmphasis">
+              参加メンバー：{tempSelectedIds.length}人
             </p>
+
+            {renderKanaFilterBar()}
 
             {participationError && (
               <p className="errorText centerText">{participationError}</p>
@@ -7880,6 +8096,7 @@ export default function App() {
                 {renderGroupedMemberList({
               membersForList: filteredMembers,
               refs: participationGroupRefs,
+              showKanaJump: false,
               renderMember: (member) => {
                 const isSelected = tempSelectedIds.includes(member.id);
                 const isOnCourt = onCourtIds.has(member.id);

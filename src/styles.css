@@ -2579,3 +2579,106 @@ div.authModeButton {
     font-size: 10px;
   }
 }
+
+/* 完成13追加：参加画面の絞り込み・通常ボタン強調・他端末更新通知・最新コート強調 */
+.normalGamePrimaryButton {
+  color: #0f2f6b;
+  background: #eef4ff;
+  border: 2px solid #0f2f6b;
+  font-size: 13px !important;
+  font-weight: 900;
+}
+
+.normalGamePrimaryButton:active {
+  background: #dbeafe;
+}
+
+.latestUpdatedCourt {
+  border-color: #2563eb !important;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18), 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.remoteUpdateFlash {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.78);
+  pointer-events: none;
+  animation: remoteUpdateFlashFade 0.2s ease-out forwards;
+}
+
+.remoteUpdateFlashText {
+  padding: 12px 18px;
+  border-radius: 14px;
+  background: rgba(17, 24, 39, 0.9);
+  color: white;
+  font-size: 18px;
+  font-weight: 900;
+  text-align: center;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+@keyframes remoteUpdateFlashFade {
+  0% { opacity: 0; }
+  18% { opacity: 1; }
+  82% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.participantCountEmphasis {
+  margin: 10px 0 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #f3f6fb;
+  color: #111827;
+  font-size: 15px;
+}
+
+.kanaFilterBar {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 7px 0 9px;
+  margin-bottom: 6px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.kanaFilterButton {
+  flex: 0 0 auto;
+  min-width: 38px;
+  padding: 7px 9px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  color: #374151;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.activeKanaFilterButton {
+  background: #1e3a8a;
+  color: white;
+}
+
+.disabledKanaFilterButton {
+  opacity: 0.35;
+}
+
+@media (max-width: 420px) {
+  .normalGamePrimaryButton {
+    font-size: 12px !important;
+  }
+
+  .remoteUpdateFlashText {
+    font-size: 16px;
+    padding: 10px 14px;
+  }
+
+  .kanaFilterButton {
+    min-width: 36px;
+    padding: 7px 8px;
+    font-size: 12px;
+  }
+}
